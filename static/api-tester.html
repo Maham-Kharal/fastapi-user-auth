@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>API Tester</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 16px; background: #f7f7f9; color: #222; }
+  h1 { font-size: 1.4rem; }
+  section { background: white; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+  h2 { font-size: 1.05rem; margin-top: 0; }
+  label { display: block; font-size: 0.85rem; margin-top: 8px; }
+  input { width: 100%; padding: 6px 8px; margin-top: 2px; box-sizing: border-box; }
+  button { margin-top: 10px; padding: 6px 14px; cursor: pointer; }
+  .msg { margin-top: 10px; padding: 8px; border-radius: 6px; font-size: 0.9rem; white-space: pre-wrap; word-break: break-word; }
+  .ok { background: #e3f7e3; border: 1px solid #a6d8a6; }
+  .err { background: #fbe3e3; border: 1px solid #d8a6a6; }
+  #wsLog { height: 150px; overflow-y: auto; background: #111; color: #0f0; padding: 8px; font-family: monospace; font-size: 0.8rem; border-radius: 6px; }
+</style>
+</head>
+<body>
+
+<h1>API Tester</h1>
+
+<section>
+  <h2>Config</h2>
+  <label>API Base URL</label>
+  <input id="baseUrl" value="http://localhost:8000">
+</section>
+
+<section>
+  <h2>Signup</h2>
+  <label>Username</label><input id="signupUser">
+  <label>Password</label><input id="signupPass" type="password">
+  <button onclick="signup()">Sign up</button>
+  <div id="signupMsg"></div>
+</section>
+
+<section>
+  <h2>Login</h2>
+  <label>Username</label><input id="loginUser">
+  <label>Password</label><input id="loginPass" type="password">
+  <button onclick="login()">Log in</button>
+  <div id="loginMsg"></div>
+</section>
+
+<section>
+  <h2>Get User</h2>
+  <label>User ID</label><input id="userId">
+  <button onclick="getUser()">Fetch user</button>
+  <div id="userMsg"></div>
+</section>
+
+<section>
+  <h2>WebSocket Echo</h2>
+  <label>WS Path (appended to base, ws:// used automatically)</label>
+  <input id="wsPath" value="/ws/echo">
+  <button onclick="connectWs()">Connect</button>
+  <button onclick="disconnectWs()">Disconnect</button>
+  <div id="wsLog"></div>
+  <label>Message</label>
+  <input id="wsMsgInput">
+  <button onclick="sendWs()">Send</button>
+</section>
+
+<script>
+function base() { return document.getElementById('baseUrl').value.replace(/\/$/, ''); }
+
+function showMsg(elId, ok, text) {
+  const el = document.getElementById(elId);
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+  el.textContent = text;
+}
+
+async function signup() {
+  const username = document.getElementById('signupUser').value;
+  const password = document.getElementById('signupPass').value;
+  try {
+    const res = await fetch(base() + '/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await res.json().catch(() => ({}));
+    showMsg('signupMsg', res.ok, `Status ${res.status}\n` + JSON.stringify(data, null, 2));
+  } catch (e) {
+    showMsg('signupMsg', false, 'Request failed: ' + e.message);
+  }
+}
+
+async function login() {
+  const username = document.getElementById('loginUser').value;
+  const password = document.getElementById('loginPass').value;
+  try {
+    const res = await fetch(base() + '/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await res.json().catch(() => ({}));
+    showMsg('loginMsg', res.ok, `Status ${res.status}\n` + JSON.stringify(data, null, 2));
+  } catch (e) {
+    showMsg('loginMsg', false, 'Request failed: ' + e.message);
+  }
+}
+
+async function getUser() {
+  const id = document.getElementById('userId').value;
+  try {
+    const res = await fetch(base() + '/users/' + encodeURIComponent(id));
+    const data = await res.json().catch(() => ({}));
+    showMsg('userMsg', res.ok, `Status ${res.status}\n` + JSON.stringify(data, null, 2));
+  } catch (e) {
+    showMsg('userMsg', false, 'Request failed: ' + e.message);
+  }
+}
+
+let ws = null;
+function log(msg) {
+  const el = document.getElementById('wsLog');
+  el.textContent += msg + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+function connectWs() {
+  const httpBase = base();
+  const wsBase = httpBase.replace(/^http/, 'ws');
+  const path = document.getElementById('wsPath').value;
+  const url = wsBase + path;
+  try {
+    ws = new WebSocket(url);
+    log('Connecting to ' + url + ' ...');
+    ws.onopen = () => log('[connected]');
+    ws.onmessage = (e) => log('< ' + e.data);
+    ws.onerror = () => log('[error - check the endpoint exists and path is correct]');
+    ws.onclose = () => log('[closed]');
+  } catch (e) {
+    log('Failed to connect: ' + e.message);
+  }
+}
+
+function disconnectWs() {
+  if (ws) ws.close();
+}
+
+function sendWs() {
+  const input = document.getElementById('wsMsgInput');
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    log('[not connected]');
+    return;
+  }
+  ws.send(input.value);
+  log('> ' + input.value);
+  input.value = '';
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chat</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 500px; margin: 40px auto; }
+  #log { height: 300px; overflow-y: auto; border: 1px solid #ccc; padding: 8px; margin-bottom: 10px; }
+  input { width: 75%; padding: 8px; }
+  button { padding: 8px 14px; }
+</style>
+</head>
+<body>
+  <h2>Chat</h2>
+  <div id="log"></div>
+  <input id="msg" placeholder="Type a message...">
+  <button onclick="send()">Send</button>
+
+<script>
+const token = localStorage.getItem('token');
+if (!token) {
+  window.location.href = 'login.html';
+}
+
+const log = document.getElementById('log');
+function append(text) {
+  const p = document.createElement('div');
+  p.textContent = text;
+  log.appendChild(p);
+  log.scrollTop = log.scrollHeight;
+}
+
+const ws = new WebSocket(`ws://localhost:8000/ws/chat?token=${token}`);
+ws.onopen = () => append('[connected]');
+ws.onmessage = (e) => append(e.data);
+ws.onclose = () => append('[disconnected]');
+ws.onerror = () => append('[connection error — token may be invalid or expired]');
+
+function send() {
+  const input = document.getElementById('msg');
+  if (ws.readyState === WebSocket.OPEN && input.value.trim()) {
+    ws.send(input.value);
+    input.value = '';
+  }
+}
+
+document.getElementById('msg').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') send();
+});
+</script>
+</body>
+</html>

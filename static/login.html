@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Login</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 400px; margin: 80px auto; }
+  input { width: 100%; padding: 8px; margin-top: 6px; box-sizing: border-box; }
+  button { margin-top: 14px; padding: 8px 16px; cursor: pointer; }
+  .err { color: #c0392b; margin-top: 10px; }
+</style>
+</head>
+<body>
+  <h2>Log in</h2>
+  <label>Username or Email</label>
+  <input id="user">
+  <label>Password</label>
+  <input id="pass" type="password">
+  <button onclick="login()">Log in</button>
+  <div id="msg" class="err"></div>
+
+<script>
+async function login() {
+  const username_or_email = document.getElementById('user').value;
+  const password = document.getElementById('pass').value;
+  try {
+    const res = await fetch('http://localhost:8000/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username_or_email, password })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      document.getElementById('msg').textContent = data.detail || 'Login failed';
+      return;
+    }
+    localStorage.setItem('token', data.access_token);
+    window.location.href = 'chat.html';
+  } catch (e) {
+    document.getElementById('msg').textContent = 'Request failed: ' + e.message;
+  }
+}
+</script>
+</body>
+</html>

@@ -1,45 +1,180 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Login</title>
+<meta charset="UTF-8" />
+<title>Sweet Crumbs Bakery — Login</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 400px; margin: 80px auto; }
-  input { width: 100%; padding: 8px; margin-top: 6px; box-sizing: border-box; }
-  button { margin-top: 14px; padding: 8px 16px; cursor: pointer; }
-  .err { color: #c0392b; margin-top: 10px; }
+  :root {
+    --cream: #FBF7EF;
+    --cream-dark: #F1E9D8;
+    --green: #8FBC94;
+    --green-dark: #5C8A66;
+    --green-darker: #3F6B49;
+    --text: #33422E;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: var(--cream);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .card {
+    background: #fff;
+    border: 1px solid var(--cream-dark);
+    border-radius: 14px;
+    padding: 32px;
+    width: 340px;
+    box-shadow: 0 4px 18px rgba(63, 107, 73, 0.08);
+  }
+  h1 {
+    font-size: 20px;
+    color: var(--green-darker);
+    margin: 0 0 4px;
+  }
+  p.subtitle {
+    margin: 0 0 20px;
+    font-size: 13px;
+    color: #7a8a74;
+  }
+  input {
+    width: 100%;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    border: 1px solid var(--cream-dark);
+    border-radius: 8px;
+    font-size: 14px;
+    background: var(--cream);
+  }
+  input:focus { outline: 2px solid var(--green); border-color: transparent; }
+  button {
+    width: 100%;
+    padding: 10px;
+    border: none;
+    border-radius: 8px;
+    background: var(--green-dark);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+  button:hover { background: var(--green-darker); }
+  .toggle {
+    text-align: center;
+    margin-top: 16px;
+    font-size: 13px;
+  }
+  .toggle a { color: var(--green-dark); cursor: pointer; text-decoration: underline; }
+  .error { color: #b3453a; font-size: 13px; margin-bottom: 10px; min-height: 16px; }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
-  <h2>Log in</h2>
-  <label>Username or Email</label>
-  <input id="user">
-  <label>Password</label>
-  <input id="pass" type="password">
-  <button onclick="login()">Log in</button>
-  <div id="msg" class="err"></div>
+
+<div class="card">
+  <h1 id="formTitle">Welcome back</h1>
+  <p class="subtitle" id="formSubtitle">Log in to Sweet Crumbs Bakery chat</p>
+  <div class="error" id="errorMsg"></div>
+
+  <!-- Login form -->
+  <form id="loginForm">
+    <input type="text" id="loginUser" placeholder="Username or email" required />
+    <input type="password" id="loginPass" placeholder="Password" required />
+    <button type="submit">Log in</button>
+  </form>
+
+  <!-- Register form -->
+  <form id="registerForm" class="hidden">
+    <input type="text" id="regUsername" placeholder="Username" required />
+    <input type="email" id="regEmail" placeholder="Email" required />
+    <input type="password" id="regPassword" placeholder="Password" required />
+    <button type="submit">Create account</button>
+  </form>
+
+  <div class="toggle">
+    <span id="toggleText">Don't have an account? <a id="toggleLink">Sign up</a></span>
+  </div>
+</div>
 
 <script>
-async function login() {
-  const username_or_email = document.getElementById('user').value;
-  const password = document.getElementById('pass').value;
-  try {
-    const res = await fetch('http://localhost:8000/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username_or_email, password })
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      document.getElementById('msg').textContent = data.detail || 'Login failed';
-      return;
+  const loginForm = document.getElementById("loginForm");
+  const registerForm = document.getElementById("registerForm");
+  const toggleLink = document.getElementById("toggleLink");
+  const toggleText = document.getElementById("toggleText");
+  const formTitle = document.getElementById("formTitle");
+  const formSubtitle = document.getElementById("formSubtitle");
+  const errorMsg = document.getElementById("errorMsg");
+
+  let showingLogin = true;
+
+  toggleLink.addEventListener("click", () => {
+    showingLogin = !showingLogin;
+    loginForm.classList.toggle("hidden", !showingLogin);
+    registerForm.classList.toggle("hidden", showingLogin);
+    formTitle.textContent = showingLogin ? "Welcome back" : "Create an account";
+    formSubtitle.textContent = showingLogin
+      ? "Log in to Sweet Crumbs Bakery chat"
+      : "Join Sweet Crumbs Bakery chat";
+    toggleText.innerHTML = showingLogin
+      ? 'Don\'t have an account? <a id="toggleLink">Sign up</a>'
+      : 'Already have an account? <a id="toggleLink">Log in</a>';
+    // re-bind since innerHTML replaced the node
+    document.getElementById("toggleLink").addEventListener("click", () => toggleLink.click());
+    errorMsg.textContent = "";
+  });
+
+  loginForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errorMsg.textContent = "";
+    const username_or_email = document.getElementById("loginUser").value;
+    const password = document.getElementById("loginPass").value;
+
+    try {
+      const res = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username_or_email, password }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Login failed");
+      }
+      const data = await res.json();
+      localStorage.setItem("token", data.access_token);
+      window.location.href = "chat.html";
+    } catch (err) {
+      errorMsg.textContent = err.message;
     }
-    localStorage.setItem('token', data.access_token);
-    window.location.href = 'chat.html';
-  } catch (e) {
-    document.getElementById('msg').textContent = 'Request failed: ' + e.message;
-  }
-}
+  });
+
+  registerForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errorMsg.textContent = "";
+    const username = document.getElementById("regUsername").value;
+    const email = document.getElementById("regEmail").value;
+    const password = document.getElementById("regPassword").value;
+
+    try {
+      const res = await fetch("/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, email, password }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Registration failed");
+      }
+      // auto-switch to login after successful signup
+      toggleLink.click();
+    } catch (err) {
+      errorMsg.textContent = err.message;
+    }
+  });
 </script>
 </body>
 </html>

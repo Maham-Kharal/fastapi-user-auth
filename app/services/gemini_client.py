@@ -66,9 +66,38 @@ async def stream_gemini(history: list[dict]):
         "generationConfig": {
             "temperature": 0.7,
             "maxOutputTokens": 512,
-            "thinkingConfig": {"thinkingBudget": 0},  # disable thinking — faster, cheaper, simpler parsing
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
+    params = {"key": settings.GEMINI_API_KEY, "alt": "sse"}
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream("POST", url, params=params, json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    chunk_data = line[len("data: "):]
+                    try:
+                        parsed = json.loads(chunk_data)
+                        candidates = parsed.get("candidates", [])
+                        if not candidates:
+                            continue
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        for part in parts:
+                            if part.get("thought"):
+                                continue
+                            text = part.get("text")
+                            if text:
+                                yield text
+                    except json.JSONDecodeError:
+                        continue
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (429, 503):
+            yield "Whoops, we're getting a lot of orders right now! 🍰 Please wait a few seconds and try again."
+        else:
+            yield "Sorry, something went wrong reaching our kitchen assistant. Please try again."
     params = {"key": settings.GEMINI_API_KEY, "alt": "sse"}
 
     async with httpx.AsyncClient(timeout=60.0) as client:

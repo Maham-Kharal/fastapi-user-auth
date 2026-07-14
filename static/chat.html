@@ -56,18 +56,33 @@
     margin-bottom: 4px;
     color: #55624f;
   }
-  #sessionList li:hover { background: var(--cream); }
-  #sessionList li.active { background: var(--green); color: #fff; }
-  #logoutBtn {
-    margin-top: 12px;
-    background: none;
-    border: 1px solid var(--cream-dark);
-    color: #8a7e6a;
-    padding: 8px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 12px;
-  }
+  #sessionList li {
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  margin-bottom: 4px;
+  color: #55624f;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.delete-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  opacity: 0.5;
+  font-size: 13px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: inherit;
+}
+
+.delete-btn:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.08);
+}
 
   /* Main chat area */
   #main { flex: 1; display: flex; flex-direction: column; }
@@ -198,21 +213,74 @@
     }
     return res;
   }
-
   async function loadSessions() {
-    const res = await apiFetch("/chat/sessions");
-    if (!res) return;
-    const sessions = await res.json();
-    sessionListEl.innerHTML = "";
-    sessions.forEach((s) => {
-      const li = document.createElement("li");
-      li.textContent = s.title || `Conversation #${s.id}`;
-      li.dataset.id = s.id;
-      if (s.id === currentSessionId) li.classList.add("active");
-      li.addEventListener("click", () => selectSession(s.id, li.textContent));
-      sessionListEl.appendChild(li);
+  const res = await apiFetch("/chat/sessions");
+  if (!res) return;
+
+  const sessions = await res.json();
+  sessionListEl.innerHTML = "";
+
+  sessions.forEach((s) => {
+    const li = document.createElement("li");
+    li.dataset.id = s.id;
+
+    if (s.id === currentSessionId) {
+      li.classList.add("active");
+    }
+
+    const titleSpan = document.createElement("span");
+    titleSpan.textContent = s.title || `Conversation #${s.id}`;
+    titleSpan.style.overflow = "hidden";
+    titleSpan.style.textOverflow = "ellipsis";
+    titleSpan.style.whiteSpace = "nowrap";
+
+    titleSpan.addEventListener("click", () => {
+      selectSession(s.id, titleSpan.textContent);
     });
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "delete-btn";
+    delBtn.textContent = "✕";
+    delBtn.title = "Delete conversation";
+
+    delBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteSession(s.id);
+    });
+
+    li.appendChild(titleSpan);
+    li.appendChild(delBtn);
+    sessionListEl.appendChild(li);
+  });
+}
+async function deleteSession(id) {
+  const confirmed = confirm(
+    "Delete this conversation? This can't be undone."
+  );
+
+  if (!confirmed) return;
+
+  const res = await apiFetch(`/chat/sessions/${id}`, {
+    method: "DELETE",
+  });
+
+  if (!res || !res.ok) {
+    alert("Failed to delete conversation.");
+    return;
   }
+
+  if (currentSessionId === id) {
+    currentSessionId = null;
+    headerTitle.textContent = "Select or start a conversation";
+    messageInput.disabled = true;
+    sendBtn.disabled = true;
+    messagesEl.innerHTML =
+      '<div id="emptyState">No conversation selected yet.</div>';
+  }
+
+  await loadSessions();
+}
+  
 
   async function selectSession(id, title) {
     currentSessionId = id;

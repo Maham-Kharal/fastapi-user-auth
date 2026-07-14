@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
 from app.core.database import get_db, SessionLocal
+from app.services.cache import get_cached_reply, set_cached_reply
+from app.services.moderation import is_blocked, REFUSAL_MESSAGE
 from app.services.gemini_client import ask_gemini, stream_gemini
 from app.schemas.schemas import (
     ChatRequest,
@@ -111,7 +113,6 @@ def list_sessions(
         .all()
     )
 
-
 @router.post("/sessions/{session_id}/messages", response_model=MessageReply)
 async def send_message(
     session_id: int,
@@ -121,24 +122,91 @@ async def send_message(
 ):
     session = _get_owned_session(session_id, current_user, db)
 
-    # 1. save the incoming user message
-    user_msg = ChatMessage(session_id=session.id, role="user", content=payload.content)
+    # Save the user's message
+    user_msg = ChatMessage(
+        session_id=session.id,
+        role="user",
+        content=payload.content,
+    )
     db.add(user_msg)
     db.commit()
     db.refresh(user_msg)
 
-    # 2. rebuild full history from DB (this is what gives Gemini "memory")
-    history_rows = _load_history(session.id, db)
-    history = [{"role": m.role, "content": m.content} for m in history_rows]
+    # ---------------- Guardrail ----------------
+    if is_blocked(payload.content):
+        assistant_msg = ChatMessage(
+            session_id=session.id,
+            role="assistant",
+            content=REFUSAL_MESSAGE,
+        )
+        db.add(assistant_msg)
+        db.commit()
+        db.refresh(assistant_msg)
 
-    # 3. call Gemini with the full history
+        logger.info(
+            "user=%s session=%d message BLOCKED by guardrail",
+            current_user.username,
+            session.id,
+        )
+
+        return MessageReply(
+            reply=MessageOut.model_validate(assistant_msg),
+            history=[
+                MessageOut.model_validate(m)
+                for m in _load_history(session.id, db)
+            ],
+        )
+
+    # ---------------- Conversation History ----------------
+    history_rows = _load_history(session.id, db)
+
+    # ---------------- Cache Check ----------------
+    if len(history_rows) == 1:
+        cached = get_cached_reply(payload.content)
+        if cached:
+            assistant_msg = ChatMessage(
+                session_id=session.id,
+                role="assistant",
+                content=cached,
+            )
+            db.add(assistant_msg)
+            db.commit()
+            db.refresh(assistant_msg)
+
+            logger.info(
+                "user=%s session=%d served from CACHE",
+                current_user.username,
+                session.id,
+            )
+
+            return MessageReply(
+                reply=MessageOut.model_validate(assistant_msg),
+                history=[
+                    MessageOut.model_validate(m)
+                    for m in history_rows + [assistant_msg]
+                ],
+            )
+
+    # ---------------- Call Gemini ----------------
+    history = [
+        {"role": m.role, "content": m.content}
+        for m in history_rows
+    ]
+
     result = await ask_gemini(history)
 
-    # 4. save the assistant's reply
-    assistant_msg = ChatMessage(session_id=session.id, role="assistant", content=result["reply"])
+    assistant_msg = ChatMessage(
+        session_id=session.id,
+        role="assistant",
+        content=result["reply"],
+    )
     db.add(assistant_msg)
     db.commit()
     db.refresh(assistant_msg)
+
+    # ---------------- Save Cache ----------------
+    if len(history_rows) == 1:
+        set_cached_reply(payload.content, result["reply"])
 
     logger.info(
         "user=%s session=%d prompt_tokens=%d completion_tokens=%d cost_usd=%.6f",
@@ -150,10 +218,15 @@ async def send_message(
     )
 
     full_history = history_rows + [assistant_msg]
+
     return MessageReply(
         reply=MessageOut.model_validate(assistant_msg),
-        history=[MessageOut.model_validate(m) for m in full_history],
+        history=[
+            MessageOut.model_validate(m)
+            for m in full_history
+        ],
     )
+     
 @router.delete("/sessions/{session_id}")
 def delete_session(
     session_id: int,
@@ -174,58 +247,51 @@ async def stream_message(
 ):
     session = _get_owned_session(session_id, current_user, db)
 
-    # Save the user's message first
-    user_msg = ChatMessage(
-        session_id=session.id,
-        role="user",
-        content=payload.content,
-    )
+    user_msg = ChatMessage(session_id=session.id, role="user", content=payload.content)
     db.add(user_msg)
     db.commit()
-
-    # Rebuild conversation history
-    history_rows = _load_history(session.id, db)
-    history = [{"role": m.role, "content": m.content} for m in history_rows]
 
     session_id_ = session.id
     username = current_user.username
 
+    # --- guardrail check ---
+    if is_blocked(payload.content):
+        logger.info("user=%s session=%d message BLOCKED by guardrail", username, session_id_)
+
+        async def blocked_generator():
+            save_db = SessionLocal()
+            try:
+                save_db.add(ChatMessage(session_id=session_id_, role="assistant", content=REFUSAL_MESSAGE))
+                save_db.commit()
+            finally:
+                save_db.close()
+            yield f"data: {json.dumps({'chunk': REFUSAL_MESSAGE})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(blocked_generator(), media_type="text/event-stream")
+    # --- end guardrail check ---
+
+    history_rows = _load_history(session.id, db)
+    history = [{"role": m.role, "content": m.content} for m in history_rows]
+
     async def event_generator():
         full_reply = ""
-
         try:
             async for chunk in stream_gemini(history):
                 full_reply += chunk
                 yield f"data: {json.dumps({'chunk': chunk})}\n\n"
-
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
             return
 
-        # Streaming finished successfully → save assistant reply
         save_db = SessionLocal()
         try:
-            assistant_msg = ChatMessage(
-                session_id=session_id_,
-                role="assistant",
-                content=full_reply,
-            )
-            save_db.add(assistant_msg)
+            save_db.add(ChatMessage(session_id=session_id_, role="assistant", content=full_reply))
             save_db.commit()
-
-            logger.info(
-                "user=%s session=%d streamed reply saved (%d chars)",
-                username,
-                session_id_,
-                len(full_reply),
-            )
-
+            logger.info("user=%s session=%d streamed reply saved (%d chars)", username, session_id_, len(full_reply))
         finally:
             save_db.close()
 
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-    )
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

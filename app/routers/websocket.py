@@ -1,30 +1,13 @@
+import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.core.security import decode_access_token
 from app.models.models import User
+from app.services.gemini_client import ask_gemini_with_tools
 
 router = APIRouter(tags=["chat"])
-
-
-class ConnectionManager:
-    def __init__(self):
-        self.active: dict[int, WebSocket] = {}
-
-    async def connect(self, user_id: int, websocket: WebSocket):
-        await websocket.accept()
-        self.active[user_id] = websocket
-
-    def disconnect(self, user_id: int):
-        self.active.pop(user_id, None)
-
-    async def broadcast(self, message: str):
-        for ws in self.active.values():
-            await ws.send_text(message)
-
-
-manager = ConnectionManager()
 
 
 @router.websocket("/ws/chat")
@@ -33,7 +16,6 @@ async def chat(websocket: WebSocket):
     user_id = decode_access_token(token) if token else None
 
     if not user_id:
-        # Reject before accepting — the client never gets a usable connection
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -44,12 +26,26 @@ async def chat(websocket: WebSocket):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    await manager.connect(user.id, websocket)
-    await manager.broadcast(f"{user.username} joined the chat")
+    await websocket.accept()
+
+    # in-memory conversation history for this single connection
+    history: list[dict] = []
+
     try:
         while True:
-            data = await websocket.receive_text()
-            await manager.broadcast(f"{user.username}: {data}")
+            user_message = await websocket.receive_text()
+            history.append({"role": "user", "content": user_message})
+
+            db = SessionLocal()
+            try:
+                result = await ask_gemini_with_tools(history, user.id, db)
+            except Exception as e:
+                result = {"reply": f"Sorry, something went wrong: {str(e)}"}
+            finally:
+                db.close()
+
+            history.append({"role": "assistant", "content": result["reply"]})
+            await websocket.send_text(result["reply"])
+
     except WebSocketDisconnect:
-        manager.disconnect(user.id)
-        await manager.broadcast(f"{user.username} left the chat")
+        pass

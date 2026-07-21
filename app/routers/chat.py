@@ -10,7 +10,10 @@ from app.core.security import get_current_user
 from app.core.database import get_db, SessionLocal
 from app.services.cache import get_cached_reply, set_cached_reply
 from app.services.moderation import is_blocked, REFUSAL_MESSAGE
-from app.services.gemini_client import ask_gemini, stream_gemini
+from app.services.gemini_client import ask_gemini, stream_gemini, SYSTEM_PROMPT
+from app.services.qdrant_service import search_library
+from app.services.retrieval_eval import get_active_chunking_settings, evaluate_rag_metrics
+import time
 from app.schemas.schemas import (
     ChatRequest,
     ChatResponse,
@@ -271,27 +274,78 @@ async def stream_message(
         return StreamingResponse(blocked_generator(), media_type="text/event-stream")
     # --- end guardrail check ---
 
+    # RAG Context Retrieval using active chunking settings
+    rag_context_parts = []
+    try:
+        active_settings = get_active_chunking_settings()
+        # Retrieve top_k based on active configuration (default 3)
+        top_k = active_settings.get("top_k", 3)
+        rag_context_parts = await search_library(payload.content, top_k=top_k)
+    except Exception as e:
+        logger.warning("RAG context lookup failed: %s", e)
+
+    system_prompt = SYSTEM_PROMPT
+    if rag_context_parts:
+        context_block = "\n".join(f"- {c}" for c in rag_context_parts)
+        system_prompt = (
+            SYSTEM_PROMPT
+            + "\n\nRelevant library knowledge retrieved from database:\n"
+            + context_block
+            + "\nUse this information to give accurate, grounded answers."
+        )
+
     history_rows = _load_history(session.id, db)
     history = [{"role": m.role, "content": m.content} for m in history_rows]
 
     async def event_generator():
         full_reply = ""
+        stream_error = None
+        start_time = time.time()
         try:
-            async for chunk in stream_gemini(history):
+            async for chunk in stream_gemini(history, system_prompt_override=system_prompt):
                 full_reply += chunk
                 yield f"data: {json.dumps({'chunk': chunk})}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-            return
+            stream_error = str(e)
+            yield f"data: {json.dumps({'chunk': f'⚠ {stream_error}'})}\n\n"
 
-        save_db = SessionLocal()
+        elapsed = time.time() - start_time
+
+        if full_reply:
+            save_db = SessionLocal()
+            try:
+                save_db.add(ChatMessage(session_id=session_id_, role="assistant", content=full_reply))
+                save_db.commit()
+                logger.info("user=%s session=%d streamed reply saved (%d chars)", username, session_id_, len(full_reply))
+            finally:
+                save_db.close()
+
+        # Grade RAG quality metrics — always send even if this fails
         try:
-            save_db.add(ChatMessage(session_id=session_id_, role="assistant", content=full_reply))
-            save_db.commit()
-            logger.info("user=%s session=%d streamed reply saved (%d chars)", username, session_id_, len(full_reply))
-        finally:
-            save_db.close()
+            metrics = await evaluate_rag_metrics(payload.content, rag_context_parts, full_reply)
+        except Exception as e:
+            logger.warning("evaluate_rag_metrics failed: %s", e)
+            metrics = {"context_relevance": 0.0, "groundedness": 0.0, "answer_relevance": 0.0}
 
+        # Estimate tokens and cost
+        history_char_count = sum(len(m["content"]) for m in history)
+        prompt_tokens = int((len(system_prompt) + history_char_count) / 4)
+        completion_tokens = int(len(full_reply) / 4)
+        cost_usd = (prompt_tokens / 1_000_000) * 0.30 + (completion_tokens / 1_000_000) * 2.50
+
+        # Always send the metadata block — RAG metrics card depends on this
+        metadata = {
+            "latency_seconds": round(elapsed, 2),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cost_usd": round(cost_usd, 6),
+            "retrieved_chunks": rag_context_parts,
+            "metrics": metrics,
+            "settings": get_active_chunking_settings(),
+            "error": stream_error,
+        }
+        yield f"data: {json.dumps({'metadata': metadata})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+

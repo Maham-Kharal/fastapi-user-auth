@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from collections import Counter
-from app.services.gemini_client import ask_gemini
+from app.services.cerebras_client import call_cerebras
 
 # ── BM25 Search Implementation ───────────────────────────────────────────────
 class BM25:
@@ -93,11 +93,11 @@ def reciprocal_rank_fusion(
 
 
 # ── Gemini Cross-Encoder Reranker ────────────────────────────────────────────
-async def gemini_rerank(
+async def cerebras_rerank(
     query: str, candidates: list[str], top_k: int = 3
 ) -> list[str]:
     """
-    Uses Gemini 3.5 Flash as a Cross-Encoder reranker.
+    Uses Cerebras as a Cross-Encoder reranker.
     Evaluates candidates in context and ranks them. Returns top_k documents.
     """
     if not candidates:
@@ -127,9 +127,9 @@ Example Output format:
 ]
 """
     try:
-        history = [{"role": "user", "content": prompt}]
-        result = await ask_gemini(history)
-        reply = result["reply"].strip()
+        messages = [{"role": "user", "content": prompt}]
+        result = await call_cerebras(messages=messages, temperature=0.2)
+        reply = result["choices"][0]["message"]["content"].strip()
 
         # Clean JSON markdown blocks if present
         if "```json" in reply:
@@ -159,7 +159,7 @@ Example Output format:
 
     except Exception as e:
         print(
-            f"WARNING: Gemini Cross-Encoder reranker failed ({e}). Falling back to original ranking."
+            f"WARNING: Cerebras Cross-Encoder reranker failed ({e}). Falling back to original ranking."
         )
         return candidates[:top_k]
 
@@ -306,7 +306,7 @@ async def run_eval_harness_logic(write_report_file: bool = False) -> dict:
         # Rerank
         if config["reranking"]:
             c_texts = [r["content"] for r in retrieved]
-            ranked_texts = await gemini_rerank(query, c_texts, top_k=3)
+            ranked_texts = await cerebras_rerank(query, c_texts, top_k=3)
             retrieved = [{"content": txt, "doc_id": chunk_map.get(txt)} for txt in ranked_texts]
 
         # Score hit
@@ -316,10 +316,10 @@ async def run_eval_harness_logic(write_report_file: bool = False) -> dict:
         context_block = "\n".join(f"- {r['content']}" for r in retrieved)
         ans_prompt = f"You are the Library Book Assistant. Answer based strictly on context. Context:\n{context_block}\n\nQuery: {query}\nAnswer:"
         try:
-            ans_res = await ask_gemini([{"role": "user", "content": ans_prompt}])
-            answer = ans_res["reply"].strip() if ans_res and ans_res.get("reply") else "[rate limited — no answer]"
+            ans_res = await call_cerebras([{"role": "user", "content": ans_prompt}])
+            answer = ans_res["choices"][0]["message"]["content"].strip() if ans_res else "[error — no answer]"
         except Exception:
-            answer = "[rate limited — no answer]"
+            answer = "[error — no answer]"
 
         return {
             "query": query,

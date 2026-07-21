@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.core.security import decode_access_token
 from app.models.models import User
-from app.services.gemini_client import ask_gemini_with_tools
+from app.services.orchestrator import run_orchestrator as orchestrate
 
 router = APIRouter(tags=["chat"])
 
@@ -38,7 +38,8 @@ async def chat(websocket: WebSocket):
 
             db = SessionLocal()
             try:
-                result = await ask_gemini_with_tools(history, user.id, db)
+                reply = await orchestrate(user_message, user.id, db)
+                result = {"reply": reply}
             except Exception as e:
                 result = {"reply": f"Sorry, something went wrong: {str(e)}"}
             finally:

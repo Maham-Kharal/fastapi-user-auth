@@ -1,9 +1,9 @@
+import json
 import asyncio
-import httpx
-from app.core.config import settings
-from app.services.gemini_client import BASE_URL
+from app.services.cerebras_client import call_cerebras
 from app.services.catalog_agent import run_catalog_agent
 from app.services.policy_agent import run_policy_agent
+from langfuse import observe
 
 ORCHESTRATOR_TOOLS = [{
     "function_declarations": [
@@ -18,7 +18,7 @@ ORCHESTRATOR_TOOLS = [{
         },
         {
             "name": "call_policy_agent",
-            "description": "Route to the Policy Agent — for questions about library hours, borrowing rules, fines, membership, or other policies.",
+            "description": "Route to the Policy Agent — for questions about library hours, borrowing limits, fines, membership, or other policies.",
             "parameters": {
                 "type": "object",
                 "properties": {"request": {"type": "string", "description": "The user's request, rephrased if needed"}},
@@ -38,64 +38,55 @@ ORCHESTRATOR_SYSTEM_PROMPT = (
     "'Policy Agent', 'orchestrator', or 'routing' in your final answer."
 )
 
-MAX_HOPS = 4  # guardrail — max routing round-trips before forcing a final answer
 
-async def orchestrate(user_message: str, user_id: int, db) -> str:
+@observe(name="orchestrator")
+async def run_orchestrator(user_message: str, user_id: int, db) -> str:
     print("===== ORCHESTRATOR START =====")
     print("User message:", user_message)
 
-    url = f"{BASE_URL}:generateContent"
-    contents = [{"role": "user", "parts": [{"text": user_message}]}]
+    messages = [{"role": "user", "content": user_message}]
+    MAX_HOPS = 4
 
-    MAX_RETRIES = 3
+    for hop in range(MAX_HOPS):
+        res = await call_cerebras(
+            messages=messages,
+            tools=ORCHESTRATOR_TOOLS,
+            system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
+            temperature=0.2
+        )
+        
+        choices = res.get("choices", [])
+        if not choices:
+            return "Sorry, I couldn't orchestrate a response."
+            
+        message = choices[0].get("message", {})
+        
+        # Append the assistant message (which might contain tool_calls)
+        messages.append({
+            "role": "assistant",
+            "content": message.get("content"),
+            "tool_calls": message.get("tool_calls")
+        })
 
-    for _ in range(MAX_HOPS):
-        payload = {
-            "system_instruction": {"parts": [{"text": ORCHESTRATOR_SYSTEM_PROMPT}]},
-            "contents": contents,
-            "tools": ORCHESTRATOR_TOOLS,
-            "generationConfig": {"temperature": 0.3, "maxOutputTokens": 512},
-        }
-        params = {"key": settings.GEMINI_API_KEY}
-        retry_delay = 2.0
-        data = None
+        tool_calls = message.get("tool_calls")
+        if not tool_calls:
+            # If no tool calls, the orchestrator has decided on the final answer
+            return message.get("content", "").strip()
 
-        for attempt in range(MAX_RETRIES):
+        # Handle routing to specialists
+        for tc in tool_calls:
+            tc_id = tc.get("id")
+            fn = tc.get("function", {})
+            name = fn.get("name")
+            args_str = fn.get("arguments", "{}")
+            
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    response = await client.post(url, params=params, json=payload)
+                args = json.loads(args_str) if isinstance(args_str, str) else args_str
+            except Exception:
+                args = {}
 
-                    print("Gemini response status:", response.status_code)
-
-                    if response.status_code in (429, 503) and attempt < MAX_RETRIES - 1:
-
-                        await asyncio.sleep(retry_delay); retry_delay *= 2; continue
-                    response.raise_for_status()
-                    data = response.json()
-                    break
-            except httpx.TimeoutException:
-                if attempt < MAX_RETRIES - 1:
-                    await asyncio.sleep(retry_delay); retry_delay *= 2; continue
-                return "Sorry, the assistant is taking too long to respond. Please try again."
-            except httpx.HTTPStatusError:
-                if attempt < MAX_RETRIES - 1:
-                    await asyncio.sleep(retry_delay); retry_delay *= 2; continue
-                return "Sorry, something went wrong. Please try again."
-
-        if data is None:
-            return "We're getting a lot of requests right now! Please wait a moment and try again."
-
-        parts = data["candidates"][0]["content"]["parts"]
-        calls = [p["functionCall"] for p in parts if "functionCall" in p]
-
-        if not calls:
-            return "".join(p.get("text", "") for p in parts).strip()
-
-        contents.append({"role": "model", "parts": parts})
-
-        for fc in calls:
-            name = fc["name"]
-            request_text = fc.get("args", {}).get("request", user_message)
+            request_text = args.get("request", user_message)
+            
             if name == "call_catalog_agent":
                 reply = await run_catalog_agent(request_text, user_id, db)
             elif name == "call_policy_agent":
@@ -103,10 +94,15 @@ async def orchestrate(user_message: str, user_id: int, db) -> str:
             else:
                 reply = f"Unknown agent: {name}"
 
-            contents.append({
-                "role": "user",
-                "parts": [{"functionResponse": {"name": name, "response": {"answer": reply}}}],
+            # Append the agent response as tool result
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc_id,
+                "name": name,
+                "content": json.dumps({"answer": reply})
             })
-        # loop continues — orchestrator sees agent replies, can respond or route again
 
     return "That needed more back-and-forth than I could complete — could you try rephrasing or splitting it into two questions?"
+
+# Alias for backwards compatibility with endpoints importing `orchestrate`
+orchestrate = run_orchestrator

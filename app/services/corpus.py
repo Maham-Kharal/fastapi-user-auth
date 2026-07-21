@@ -72,6 +72,186 @@ RAW_DOCUMENTS = [
             "fulfill a prophecy that will change the galaxy forever."
         ),
     },
+    {
+        "id": 7,
+        "title": "History of the Library Foundation",
+        "text": (
+            "The library was founded in 1924 by a group of local citizens who wanted to promote literacy. "
+            "It began as a single room with 500 books and has grown to its current size over a century. "
+            "The historical archives contain original letters, photographs, and records from the early years."
+        ),
+    },
+    {
+        "id": 8,
+        "title": "Children's Storytime & Reading Area Rules",
+        "text": (
+            "The children's section is designed for kids under 12 years old. Storytime sessions are held "
+            "every Tuesday and Thursday morning starting at 10:30 AM. Parents or guardians must accompany "
+            "children at all times. Please ensure toys and books are returned to their shelves after use."
+        ),
+    },
+    {
+        "id": 9,
+        "title": "Quiet Study Rooms Booking Policy",
+        "text": (
+            "Quiet study rooms are available for individual or group study. Rooms can be booked for up "
+            "to 2 hours per day. Bookings must be made in advance online or at the information desk. "
+            "If a room is not occupied within 15 minutes of the start time, the booking is cancelled."
+        ),
+    },
+    {
+        "id": 10,
+        "title": "Interlibrary Loan Service",
+        "text": (
+            "If our library does not have a book you need, you can request it through interlibrary loan. "
+            "We partner with other libraries across the region to share resources. It typically takes "
+            "5 to 7 business days for a book to arrive. Loan periods are set by the lending library."
+        ),
+    },
+    {
+        "id": 11,
+        "title": "Donations & Gift Books Guidelines",
+        "text": (
+            "We welcome donations of gently used books, CDs, and DVDs. Donations can be dropped off at the "
+            "designated bin near the side entrance. We accept fiction, non-fiction, and children's books. "
+            "Items that we cannot add to our collection are sold in the annual library book sale."
+        ),
+    },
+    {
+        "id": 12,
+        "title": "Volunteer Program & Community Service",
+        "text": (
+            "The library offers volunteer opportunities for teens and adults. Volunteers help with shelving "
+            "books, organizing events, and assisting patrons. High school students can earn community service "
+            "hours. Interested individuals must fill out an application and pass a background check."
+        ),
+    },
+    {
+        "id": 13,
+        "title": "Lost and Found Items Policy",
+        "text": (
+            "Items found in the library are turned in to the front desk. Valuable items such as phones, "
+            "wallets, and keys are kept in a secure locker. Unclaimed items are held for 30 days. "
+            "After 30 days, unclaimed items are donated to local charities or disposed of."
+        ),
+    },
+    {
+        "id": 14,
+        "title": "Computer Lab and Internet Code of Conduct",
+        "text": (
+            "Our computer lab offers free internet access and printing services. Patrons must log in using "
+            "their library card number. Printing costs $0.10 per page for black and white, and $0.50 for color. "
+            "Viewing inappropriate content or engaging in illegal activities is strictly prohibited."
+        ),
+    },
+    {
+        "id": 15,
+        "title": "Noise Level & Behavior in Silent Zones",
+        "text": (
+            "To provide a productive environment, the third floor is designated as a silent study zone. "
+            "No talking or group discussions are allowed on this floor. Phone calls must be taken in the "
+            "lobby. Headphones must be used for audio devices and kept at a low volume."
+        ),
+    },
+    {
+        "id": 16,
+        "title": "Food and Beverage Regulations",
+        "text": (
+            "Patrons may bring covered drinks and small snacks into the library. Hot food, meals, and "
+            "messy snacks are not allowed in the study areas. Please dispose of trash in the recycling "
+            "and waste bins provided throughout the building. Report any spills to staff immediately."
+        ),
+    },
+    {
+        "id": 17,
+        "title": "Classic Literature Profile: Herman Melville's Moby Dick",
+        "text": (
+            "Moby-Dick is an epic novel written by Herman Melville and published in 1851. It details the "
+            "voyage of the whaling ship Pequod, commanded by Captain Ahab. Ahab is obsessed with seeking "
+            "revenge on Moby Dick, a giant white sperm whale that previously bit off his leg."
+        ),
+    },
+    {
+        "id": 18,
+        "title": "Classic Literature Profile: Jane Austen's Pride and Prejudice",
+        "text": (
+            "Pride and Prejudice is a classic romantic novel of manners written by Jane Austen in 1813. "
+            "It follows the character development of Elizabeth Bennet, who learns about the error of "
+            "making hasty judgments and comes to appreciate the difference between superficial and real goodness."
+        ),
+    },
+    {
+        "id": 19,
+        "title": "Mystery Literature Profile: Arthur Conan Doyle's Sherlock Holmes",
+        "text": (
+            "The Adventures of Sherlock Holmes is a collection of detective stories by Arthur Conan Doyle. "
+            "It features the brilliant consulting detective Sherlock Holmes and his companion Dr. John Watson. "
+            "Together they solve complex cases in Victorian London using Holmes's signature deductive reasoning."
+        ),
+    },
+    {
+        "id": 20,
+        "title": "Scientific Literature Profile: Stephen Hawking's A Brief History of Time",
+        "text": (
+            "A Brief History of Time is a popular-science book written by English physicist Stephen Hawking. "
+            "First published in 1988, it explains complex topics in cosmology like the Big Bang, black holes, "
+            "and light cones, to non-specialist readers using simple language and illustrations."
+        ),
+    },
+    {
+        "id": 21,
+        "title": "Library Parking and Transportation Policy",
+        "text": (
+            "Free parking is available for all library visitors in the north parking lot. Patrons must display "
+            "a valid parking permit on their dashboard if parking for more than three hours. Bicycle racks "
+            "are located near the main entrance. Public buses stop directly in front of the library every 20 minutes."
+        ),
+    },
+    {
+        "id": 22,
+        "title": "Meeting and Event Space Reservations",
+        "text": (
+            "The library has a community room available for public meetings, workshops, and events. The room "
+            "can accommodate up to 50 people and features a projector and sound system. Reservations must "
+            "be made by a registered library member at least two weeks in advance. A fee of $25 per hour applies."
+        ),
+    },
+    {
+        "id": 23,
+        "title": "Exhibits, Displays, and Bulletin Board Policy",
+        "text": (
+            "The library maintains bulletin boards and display cases to highlight local events, art, and "
+            "culture. Submissions for the bulletin board must be approved by the library director. Items "
+            "must be non-commercial, non-sectarian, and of general community interest. Postings are limited to 30 days."
+        ),
+    },
+    {
+        "id": 24,
+        "title": "Emergency Evacuation and Safety Protocol",
+        "text": (
+            "In the event of an emergency, such as a fire or severe weather, all patrons must follow the "
+            "instructions of library staff. Emergency exits are clearly marked on all floors. Evacuation routes "
+            "lead to the south parking lot. Please do not use the elevators during an evacuation."
+        ),
+    },
+    {
+        "id": 25,
+        "title": "Privacy and Patron Records Policy",
+        "text": (
+            "We are committed to protecting your privacy. The library does not disclose information about "
+            "borrowed books, search histories, or personal details to third parties unless required by law. "
+            "Patron records are kept strictly confidential and are only accessed by authorized staff members."
+        ),
+    },
+    {
+        "id": 26,
+        "title": "Acceptable Use of Library Materials",
+        "text": (
+            "Patrons are expected to treat all library materials with care. Highlighting, writing, or "
+            "folding pages in library books is considered damage. Materials must be returned in the same "
+            "condition they were borrowed. Repeat offenders may have their borrowing privileges suspended."
+        ),
+    }
 ]
 
 # Core evaluation questions mapped to expected document IDs.

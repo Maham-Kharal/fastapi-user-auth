@@ -11,7 +11,8 @@ from app.core.security import get_current_user
 from app.core.database import get_db, SessionLocal
 from app.services.cache import get_cached_reply, set_cached_reply
 from app.services.moderation import is_blocked, REFUSAL_MESSAGE
-from app.services.gemini_client import ask_gemini, stream_gemini, SYSTEM_PROMPT
+from app.services.cerebras_client import call_cerebras
+from app.services.gemini_client import SYSTEM_PROMPT
 from app.services.qdrant_service import search_library
 from app.services.retrieval_eval import get_active_chunking_settings, evaluate_rag_metrics
 import time
@@ -37,7 +38,18 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 @router.post("", response_model=ChatResponse)
 async def chat(request: ChatRequest, current_user=Depends(get_current_user)):
-    result = await ask_gemini([{"role": "user", "content": request.message}])
+    res = await call_cerebras([{"role": "user", "content": request.message}])
+    reply = res["choices"][0]["message"]["content"]
+    usage = res.get("usage", {})
+    prompt_tokens = usage.get("prompt_tokens", 0)
+    completion_tokens = usage.get("completion_tokens", 0)
+    cost = (prompt_tokens / 1_000_000) * 0.05 + (completion_tokens / 1_000_000) * 0.25
+    result = {
+        "reply": reply,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cost_usd": round(cost, 6)
+    }
 
     logger.info(
         "user=%s prompt_tokens=%d completion_tokens=%d cost_usd=%.6f",
@@ -191,13 +203,24 @@ async def send_message(
                 ],
             )
 
-    # ---------------- Call Gemini ----------------
+    # ---------------- Call Cerebras ----------------
     history = [
         {"role": m.role, "content": m.content}
         for m in history_rows
     ]
 
-    result = await ask_gemini(history)
+    res = await call_cerebras(history)
+    reply = res["choices"][0]["message"]["content"]
+    usage = res.get("usage", {})
+    prompt_tokens = usage.get("prompt_tokens", 0)
+    completion_tokens = usage.get("completion_tokens", 0)
+    cost = (prompt_tokens / 1_000_000) * 0.05 + (completion_tokens / 1_000_000) * 0.25
+    result = {
+        "reply": reply,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cost_usd": round(cost, 6)
+    }
 
     assistant_msg = ChatMessage(
         session_id=session.id,

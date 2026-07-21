@@ -76,28 +76,32 @@ RAW_DOCUMENTS = [
 
 # Core evaluation questions mapped to expected document IDs.
 EVAL_QUESTIONS = [
-    {
-        "query": "What time does the library close on Saturdays?",
-        "expected_doc_id": 1,
-    },
-    {
-        "query": "How many books can a member check out at once?",
-        "expected_doc_id": 2,
-    },
-    {
-        "query": "What is the penalty if I return a library book late?",
-        "expected_doc_id": 3,
-    },
-    {
-        "query": "What documents do I need to bring to sign up for a library card?",
-        "expected_doc_id": 4,
-    },
-    {
-        "query": "Who are the main characters in the fantasy book The Hobbit?",
-        "expected_doc_id": 5,
-    },
-    {
-        "query": "Why is the planet Arrakis important in Frank Herbert's Dune?",
-        "expected_doc_id": 6,
-    },
+    {"query": "Is the library open on New Year's Day?", 
+     "expected_doc_id": 1},
+    {"query": "Are the library hours different during finals?", 
+     "expected_doc_id": 1},
+    {"query": "What time can I visit on a weekday morning?", 
+     "expected_doc_id": 1},
+    {"query": "Can I renew a book more than one time?", 
+     "expected_doc_id": 2},
+    {"query": "Can I take a magazine or reference book home with me?", 
+     "expected_doc_id": 2},
+    {"query": "How much extra time do I get after the due date before I'm charged?", 
+     "expected_doc_id": 3},
+    {"query": "What happens if I destroy a book I borrowed?", 
+     "expected_doc_id": 3},
+    {"query": "Where can I drop off books after closing time?", 
+     "expected_doc_id": 3},
+    {"query": "Can someone without a fixed home address still sign up?", 
+     "expected_doc_id": 4},
+    {"query": "Do university students need to fill out a separate application?", 
+     "expected_doc_id": 4},
+    {"query": "How many electronic books can I access with my membership?", 
+     "expected_doc_id": 4},
+    {"query": "What object does Bilbo find on his journey that becomes important later?", 
+     "expected_doc_id": 5},
+    {"query": "Which mountain do the dwarves want to reclaim from the dragon?", 
+     "expected_doc_id": 5},
+    {"query": "What natural resource makes space travel possible in Dune, and where is it found?", 
+     "expected_doc_id": 6},
 ]

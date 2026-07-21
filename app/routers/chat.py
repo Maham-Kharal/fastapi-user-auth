@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.services.orchestrator import orchestrate
 from app.core.security import get_current_user
 from app.core.database import get_db, SessionLocal
 from app.services.cache import get_cached_reply, set_cached_reply
@@ -300,14 +301,15 @@ async def stream_message(
     async def event_generator():
         full_reply = ""
         stream_error = None
+        rag_context_parts = []  # kept for the metadata card; orchestrator handles retrieval internally now
         start_time = time.time()
         try:
-            async for chunk in stream_gemini(history, system_prompt_override=system_prompt):
-                full_reply += chunk
-                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            full_reply = await orchestrate(payload.content, current_user.id, db)
+            yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
         except Exception as e:
             stream_error = str(e)
-            yield f"data: {json.dumps({'chunk': f'⚠ {stream_error}'})}\n\n"
+            full_reply = f"⚠ {stream_error}"
+            yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
 
         elapsed = time.time() - start_time
 

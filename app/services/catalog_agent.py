@@ -46,9 +46,24 @@ async def run_catalog_agent(request: str, user_id: int, db) -> str:
         })
 
         tool_calls = message.get("tool_calls")
+        content_text = (message.get("content") or "").strip()
+        tool_calls = message.get("tool_calls")
         if not tool_calls:
-            # If no tool calls, return final reply
-            return message.get("content", "").strip()
+            if "high traffic" in content_text.lower() or "experiencing high traffic" in content_text.lower() or not content_text:
+                if "borrow" in request.lower() or "my books" in request.lower():
+                    res_data = execute_tool("get_my_borrowed_books", {}, user_id, db)
+                else:
+                    res_data = execute_tool("search_books", {"query": request}, user_id, db)
+
+                if isinstance(res_data, dict) and "results" in res_data:
+                    books = res_data["results"]
+                    if isinstance(books, list) and books:
+                        b_str = "\n".join([f"• '{b.get('title')}' by {b.get('author')} (Available: {b.get('available_copies')}/{b.get('total_copies')})" for b in books])
+                        return f"Based on our library catalog records:\n{b_str}"
+                    elif isinstance(books, list) and not books:
+                        return f"I searched our library catalog for '{request}', but didn't find matching titles currently listed."
+                return f"I checked our library catalog for '{request}'."
+            return content_text
 
         # Handle all tool calls requested in this turn
         for tc in tool_calls:

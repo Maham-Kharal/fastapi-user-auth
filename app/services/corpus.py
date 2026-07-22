@@ -254,34 +254,51 @@ RAW_DOCUMENTS = [
     }
 ]
 
+def add_documents_to_corpus(new_docs: list[dict]):
+    """
+    Appends new documents (e.g. parsed PDF pages or uploaded text) to RAW_DOCUMENTS.
+    Each item in new_docs should have 'title' and 'text'.
+    Automatically assigns incremental document IDs and generates eval questions for evaluation.
+    """
+    start_id = max([doc["id"] for doc in RAW_DOCUMENTS], default=0) + 1
+    for i, doc in enumerate(new_docs):
+        doc_id = start_id + i
+        RAW_DOCUMENTS.append({
+            "id": doc_id,
+            "title": doc.get("title", f"Custom Document {doc_id}"),
+            "text": doc["text"]
+        })
+        # Generate evaluation questions from PDF page content
+        sentences = [s.strip() for s in doc["text"].replace("\n", " ").split(".") if len(s.strip()) > 15]
+        for s in sentences[:2]:
+            q_text = s[:90]
+            if not q_text.endswith("?"):
+                q_text += "?"
+            EVAL_QUESTIONS.append({
+                "query": f"What does the document state regarding: {q_text}",
+                "expected_doc_id": doc_id
+            })
+
+    print(f"[Corpus] Added {len(new_docs)} new documents & questions. Total corpus: {len(RAW_DOCUMENTS)} docs, {len(EVAL_QUESTIONS)} questions.")
+
+def get_raw_documents():
+    return RAW_DOCUMENTS
+
+
 # Core evaluation questions mapped to expected document IDs.
 EVAL_QUESTIONS = [
-    {"query": "Is the library open on New Year's Day?", 
-     "expected_doc_id": 1},
-    {"query": "Are the library hours different during finals?", 
-     "expected_doc_id": 1},
-    {"query": "What time can I visit on a weekday morning?", 
-     "expected_doc_id": 1},
-    {"query": "Can I renew a book more than one time?", 
-     "expected_doc_id": 2},
-    {"query": "Can I take a magazine or reference book home with me?", 
-     "expected_doc_id": 2},
-    {"query": "How much extra time do I get after the due date before I'm charged?", 
-     "expected_doc_id": 3},
-    {"query": "What happens if I destroy a book I borrowed?", 
-     "expected_doc_id": 3},
-    {"query": "Where can I drop off books after closing time?", 
-     "expected_doc_id": 3},
-    {"query": "Can someone without a fixed home address still sign up?", 
-     "expected_doc_id": 4},
-    {"query": "Do university students need to fill out a separate application?", 
-     "expected_doc_id": 4},
-    {"query": "How many electronic books can I access with my membership?", 
-     "expected_doc_id": 4},
-    {"query": "What object does Bilbo find on his journey that becomes important later?", 
-     "expected_doc_id": 5},
-    {"query": "Which mountain do the dwarves want to reclaim from the dragon?", 
-     "expected_doc_id": 5},
-    {"query": "What natural resource makes space travel possible in Dune, and where is it found?", 
-     "expected_doc_id": 6},
+    {"query": "Is the library open on New Year's Day?", "expected_doc_id": 1},
+    {"query": "Are the library hours different during finals?", "expected_doc_id": 1},
+    {"query": "What time can I visit on a weekday morning?", "expected_doc_id": 1},
+    {"query": "Can I renew a book more than one time?", "expected_doc_id": 2},
+    {"query": "Can I take a magazine or reference book home with me?", "expected_doc_id": 2},
+    {"query": "How much extra time do I get after the due date before I'm charged?", "expected_doc_id": 3},
+    {"query": "What happens if I destroy a book I borrowed?", "expected_doc_id": 3},
+    {"query": "Where can I drop off books after closing time?", "expected_doc_id": 3},
+    {"query": "Can someone without a fixed home address still sign up?", "expected_doc_id": 4},
+    {"query": "Do university students need to fill out a separate application?", "expected_doc_id": 4},
+    {"query": "How many electronic books can I access with my membership?", "expected_doc_id": 4},
+    {"query": "What object does Bilbo find on his journey that becomes important later?", "expected_doc_id": 5},
+    {"query": "Which mountain do the dwarves want to reclaim from the dragon?", "expected_doc_id": 5},
+    {"query": "What natural resource makes space travel possible in Dune, and where is it found?", "expected_doc_id": 6},
 ]

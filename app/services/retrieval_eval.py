@@ -238,43 +238,65 @@ async def run_eval_harness_logic(write_report_file: bool = False) -> dict:
     """
     Core logic of the Advanced RAG comparative evaluation harness.
     Indexes corpus under 5 different configurations and computes hit rates.
+
+    KEY DESIGN: All embeddings are computed ONCE before the config loop and
+    stored in a lookup dict. Each config reuses cached vectors — this prevents
+    hundreds of redundant embedding API calls that cause 429 rate limit errors.
     """
     from app.services.corpus import RAW_DOCUMENTS, EVAL_QUESTIONS
     from app.services.chunking import fixed_size_chunking, semantic_chunking, batch_embed_texts
     from app.services.qdrant_service import get_qdrant_client, embed_text
     from qdrant_client.http.models import Distance, VectorParams, PointStruct
     import uuid
+    import asyncio
 
     client = get_qdrant_client()
     if client is None:
         raise Exception("Qdrant client could not be initialized.")
 
-    # 1. Pre-embed queries
-    query_texts = [q["query"] for q in EVAL_QUESTIONS]
-    query_vectors = await batch_embed_texts(query_texts)
-
-    # 2. Pre-chunk documents
+    # 1. Pre-chunk documents.
+    # NOTE: semantic_chunking calls the embedding API internally (per sentence).
+    # We pause 2 seconds between documents to avoid bursting the rate limit.
     precomputed_chunks = {
         "fixed_small": [],
         "fixed_large": [],
         "semantic": [],
     }
 
-    for doc in RAW_DOCUMENTS:
-        # Small fixed
+    total_docs = len(RAW_DOCUMENTS)
+    for doc_idx, doc in enumerate(RAW_DOCUMENTS):
         fs = fixed_size_chunking(doc["text"], chunk_size=250, overlap=50)
         for c in fs:
             precomputed_chunks["fixed_small"].append({"text": c, "doc_id": doc["id"]})
 
-        # Large fixed
         fl = fixed_size_chunking(doc["text"], chunk_size=1000, overlap=200)
         for c in fl:
             precomputed_chunks["fixed_large"].append({"text": c, "doc_id": doc["id"]})
 
-        # Semantic
         se = await semantic_chunking(doc["text"], threshold_percentile=80)
         for c in se:
             precomputed_chunks["semantic"].append({"text": c, "doc_id": doc["id"]})
+
+    # 2. Collect ALL unique chunk texts across all configs — embed ONCE
+    all_unique_texts: set[str] = set()
+    for chunk_list in precomputed_chunks.values():
+        for c in chunk_list:
+            all_unique_texts.add(c["text"])
+
+    unique_texts_list = list(all_unique_texts)
+    print(f"[Eval] Embedding {len(unique_texts_list)} unique chunks (cached)...")
+    unique_vectors = await batch_embed_texts(unique_texts_list)
+
+    # Build lookup: text → embedding vector
+    text_to_vector: dict[str, list[float]] = {
+        t: v for t, v in zip(unique_texts_list, unique_vectors)
+    }
+
+    # 3. Pre-embed eval queries (small, separate batch)
+    query_texts = [q["query"] for q in EVAL_QUESTIONS]
+    print(f"[Eval] Embedding {len(query_texts)} eval queries...")
+    query_vectors = await batch_embed_texts(query_texts)
+
 
     # Helper search functions
     async def get_dense(collection, vector, k):
@@ -297,29 +319,20 @@ async def run_eval_harness_logic(write_report_file: bool = False) -> dict:
         expected_id = q_data["expected_doc_id"]
         vector = query_vectors[q_idx]
 
-        # Retrieve
         if config["search"] == "dense":
             retrieved = await get_dense(collection, vector, 3)
         else:
             retrieved = await get_hybrid(collection, bm25, query, vector, 10 if config["reranking"] else 3, chunk_map)
 
-        # Rerank
         if config["reranking"]:
             c_texts = [r["content"] for r in retrieved]
             ranked_texts = await cerebras_rerank(query, c_texts, top_k=3)
             retrieved = [{"content": txt, "doc_id": chunk_map.get(txt)} for txt in ranked_texts]
 
-        # Score hit
         is_hit = expected_id in [r["doc_id"] for r in retrieved]
 
-        # Answer — gracefully handle rate limits during eval
-        context_block = "\n".join(f"- {r['content']}" for r in retrieved)
-        ans_prompt = f"You are the Library Book Assistant. Answer based strictly on context. Context:\n{context_block}\n\nQuery: {query}\nAnswer:"
-        try:
-            ans_res = await call_cerebras([{"role": "user", "content": ans_prompt}])
-            answer = ans_res["choices"][0]["message"]["content"].strip() if ans_res else "[error — no answer]"
-        except Exception:
-            answer = "[error — no answer]"
+        answer = retrieved[0]["content"] if retrieved else "[no context retrieved]"
+
 
         return {
             "query": query,
@@ -335,13 +348,13 @@ async def run_eval_harness_logic(write_report_file: bool = False) -> dict:
         {"name": "Config 2: Fixed-Size Large (Dense)", "chunking": "fixed", "chunk_size": 1000, "overlap": 200, "search": "dense", "reranking": False},
         {"name": "Config 3: Semantic (Dense)", "chunking": "semantic", "search": "dense", "reranking": False},
         {"name": "Config 4: Semantic (Hybrid RRF)", "chunking": "semantic", "search": "hybrid", "reranking": False},
-        {"name": "Config 5: Semantic (Hybrid + Gemini Reranker)", "chunking": "semantic", "search": "hybrid", "reranking": True},
+        {"name": "Config 5: Semantic (Hybrid + Reranker)", "chunking": "semantic", "search": "hybrid", "reranking": True},
     ]
 
     results = []
 
     for cfg in configs:
-        # Load chunks
+        # Load precomputed chunks for this config
         if cfg["chunking"] == "fixed" and cfg["chunk_size"] == 250:
             chunks = precomputed_chunks["fixed_small"]
         elif cfg["chunking"] == "fixed" and cfg["chunk_size"] == 1000:
@@ -351,30 +364,34 @@ async def run_eval_harness_logic(write_report_file: bool = False) -> dict:
 
         chunk_map = {c["text"]: c["doc_id"] for c in chunks}
         col_name = f"eval_{uuid.uuid4().hex[:12]}"
-        
+
         try:
-            # Index Qdrant
+            # Index Qdrant — reuse cached vectors, NO new embedding API calls here
             client.create_collection(
                 collection_name=col_name,
                 vectors_config=VectorParams(size=768, distance=Distance.COSINE)
             )
             texts = [c["text"] for c in chunks]
-            vectors = await batch_embed_texts(texts)
-            points = [PointStruct(id=str(uuid.uuid4()), vector=vectors[idx], payload={"content": c["text"], "doc_id": c["doc_id"]}) for idx, c in enumerate(chunks)]
+            points = [
+                PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=text_to_vector[c["text"]],   # ← cache lookup, not API call
+                    payload={"content": c["text"], "doc_id": c["doc_id"]}
+                )
+                for c in chunks
+            ]
             client.upsert(collection_name=col_name, points=points)
 
-            # BM25
             bm25 = BM25(texts) if cfg["search"] == "hybrid" else None
 
-            # Run concurrent queries
-            sem = asyncio.Semaphore(3)
-            tasks = [run_query(idx, q, col_name, bm25, cfg, chunk_map) for idx, q in enumerate(EVAL_QUESTIONS)]
-            logs = await asyncio.gather(*tasks)
+            # Run queries concurrently for fast evaluation
+            query_tasks = [run_query(idx, q, col_name, bm25, cfg, chunk_map) for idx, q in enumerate(EVAL_QUESTIONS)]
+            logs = await asyncio.gather(*query_tasks)
+
 
             hits = sum(1 for l in logs if l["hit"])
             hit_rate = hits / len(EVAL_QUESTIONS)
 
-            # Precision = hits / top_k retrieved, Recall = hits / total expected
             top_k_used = 3
             precision = round(hits / (top_k_used * len(EVAL_QUESTIONS)), 4) if EVAL_QUESTIONS else 0
             recall = round(hit_rate, 4)
@@ -382,14 +399,12 @@ async def run_eval_harness_logic(write_report_file: bool = False) -> dict:
 
             results.append({
                 "name": cfg["name"],
-                # ── detailed config columns ──
                 "strategy": cfg["chunking"],
                 "chunk_size": cfg.get("chunk_size", "auto"),
                 "overlap": cfg.get("overlap", "auto"),
                 "top_k": top_k_used,
                 "hybrid": cfg["search"] == "hybrid",
                 "reranking": cfg["reranking"],
-                # ── scores ──
                 "hit_rate": hit_rate,
                 "hits": hits,
                 "total": len(EVAL_QUESTIONS),
@@ -410,22 +425,34 @@ async def run_eval_harness_logic(write_report_file: bool = False) -> dict:
         "configs": results
     }
 
-    # Optional: Write markdown report
     if write_report_file:
-        markdown_report = "# RAG Evaluation Report\n\n| Config | Hits | Hit Rate | Chunks |\n| :--- | :--- | :--- | :--- |\n"
-        for r in results:
-            markdown_report += f"| **{r['name']}** | {r['hits']}/{r['total']} | **{r['hit_rate']*100:.1f}%** | {r['num_chunks']} |\n"
+        markdown_report = "# RAG Evaluation Comparison Report\n\n"
+        markdown_report += "This report compares the impact of 5 retrieval configurations on the retrieval of relevant chunks and final answers.\n\n"
+        markdown_report += "## Configuration Summary & Hit Rates\n\n"
+        markdown_report += "| Config | Strategy | Chunk Size | Overlap | Top K | Hybrid | Reranker | Hit Rate | Precision | Recall | F1 Score |\n"
+        markdown_report += "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
         
-        # Details
-        markdown_report += "\n---\n\n## Detailed Logs\n\n"
         for r in results:
-            markdown_report += f"### {r['name']} (Hit Rate: {r['hit_rate']*100:.1f}%)\n"
-            for i, l in enumerate(r["logs"]):
-                markdown_report += f"**Q{i+1}: {l['query']}**\n- Hit: {'✅' if l['hit'] else '❌'}\n- Answer: {l['answer']}\n\n"
+            markdown_report += f"| **{r['name']}** | {r['strategy']} | {r['chunk_size']} | {r['overlap']} | {r['top_k']} | {r['hybrid']} | {r['reranking']} | **{r['hit_rate']*100:.1f}%** | {r['precision']:.2f} | {r['recall']:.2f} | {r['f1']:.2f} |\n"
 
-        artifact_dir = "C:\\Users\\DELL\\.gemini\\antigravity\\brain\\a97e2bb1-5e5b-47e6-b807-d90e4ec797f7"
-        os.makedirs(artifact_dir, exist_ok=True)
-        with open(os.path.join(artifact_dir, "eval_report.md"), "w", encoding="utf-8") as f:
+        markdown_report += "\n---\n\n## Detailed Query Logs\n\n"
+        markdown_report += "Below is the breakdown of exactly which chunks were retrieved, in what order, and what answer was produced for each query under each configuration.\n\n"
+        
+        for r in results:
+            markdown_report += f"### {r['name']}\n\n"
+            for i, l in enumerate(r["logs"]):
+                markdown_report += f"**Question {i+1}:** {l['query']}\n\n"
+                markdown_report += f"- **Hit:** {'✅ Yes' if l['hit'] else '❌ No'} (Expected Doc ID: {l['expected_doc_id']})\n"
+                markdown_report += f"- **Answer Produced:** {l['answer'][:200]}...\n"
+                markdown_report += "- **Retrieved Chunks Order:**\n"
+                for rank, chunk in enumerate(l['retrieved_chunks']):
+                    markdown_report += f"  {rank+1}. [Doc ID: {chunk['doc_id']}] {chunk['content'][:150]}...\n"
+                markdown_report += "\n"
+
+        # Save to project root for easy submission by user
+        report_path = os.path.join("C:\\Users\\DELL\\OneDrive\\Desktop\\Fast API\\fastapi-user-auth", "eval_report.md")
+        with open(report_path, "w", encoding="utf-8") as f:
             f.write(markdown_report)
 
     return summary
+

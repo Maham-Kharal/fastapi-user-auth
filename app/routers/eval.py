@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 import uuid
 
 from app.core.security import get_current_user
 from app.core.config import settings
-from app.services.corpus import RAW_DOCUMENTS
+from app.services.corpus import RAW_DOCUMENTS, add_documents_to_corpus
 from app.services.chunking import fixed_size_chunking, semantic_chunking, batch_embed_texts
 from app.services.qdrant_service import get_qdrant_client
+from app.services.pdf_service import extract_text_from_pdf_bytes
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
 
 from app.services.retrieval_eval import (
@@ -28,6 +29,35 @@ class ReindexRequest(BaseModel):
 def get_settings(current_user=Depends(get_current_user)):
     """Return the active chunking settings."""
     return get_active_chunking_settings()
+
+
+@router.post("/upload-pdf")
+async def upload_pdf(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user)
+):
+    """
+    Ingests a PDF file, parses its pages into library corpus documents,
+    and returns details on added pages.
+    """
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+
+    try:
+        contents = await file.read()
+        parsed_docs = extract_text_from_pdf_bytes(contents)
+        if not parsed_docs:
+            raise HTTPException(status_code=400, detail="No readable text found in PDF.")
+
+        add_documents_to_corpus(parsed_docs)
+        return {
+            "status": "success",
+            "filename": file.filename,
+            "pages_added": len(parsed_docs),
+            "total_corpus_docs": len(RAW_DOCUMENTS)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF processing failed: {str(e)}")
 
 
 @router.post("/reindex")
@@ -114,3 +144,4 @@ async def run_evaluation(current_user=Depends(get_current_user)):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+

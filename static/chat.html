@@ -398,6 +398,11 @@ input[type=range]::-webkit-slider-thumb{
   <div class="panel-section" style="border-bottom:none">
     <div class="section-title"><span class="dot"></span>Eval Harness</div>
     <p class="eval-note">Runs 5 configs × 14 questions. Computes Precision, Recall, F1 &amp; Hit Rate for each.</p>
+    <div style="margin-bottom:10px">
+      <input type="file" id="pdfFileInput" accept=".pdf" style="display:none" />
+      <button id="uploadPdfBtn" style="width:100%;padding:8px;border-radius:9px;border:1px dashed var(--accent);background:rgba(99,102,241,.1);color:var(--accent);font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;margin-bottom:4px">📄 Upload PDF for RAG Evaluation</button>
+      <div id="pdfUploadStatus" style="font-size:11px;color:var(--muted);margin-bottom:6px;text-align:center"></div>
+    </div>
     <button id="runEvalBtn">▶ Run Full Evaluation</button>
     <div id="evalStatus"></div>
     <button id="openModalBtn" style="display:none;margin-top:8px;width:100%;padding:8px;border-radius:9px;border:1px solid var(--green);background:rgba(52,211,153,.1);color:var(--green);font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">📊 View Results Table</button>
@@ -485,10 +490,15 @@ $("strategySelect").addEventListener("change", e => {
 
 // ── Auth helper ───────────────────────────────────────────────────
 async function apiFetch(url, opts={}){
-  const res = await fetch(url, {...opts, headers:{...authH,...(opts.headers||{})}});
+  const headers = {"Authorization": `Bearer ${token}`, ...(opts.headers||{})};
+  if (!(opts.body instanceof FormData) && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+  const res = await fetch(url, {...opts, headers});
   if (res.status===401){ localStorage.removeItem("token"); location.href="login.html"; return null; }
   return res;
 }
+
 
 // ── Sessions ──────────────────────────────────────────────────────
 async function loadSessions(){
@@ -777,6 +787,29 @@ $("reindexBtn").addEventListener("click", async () => {
 // ── Modal Controls ────────────────────────────────────────────────
 $("closeModalBtn").addEventListener("click", () => $("evalModal").style.display = "none");
 $("openModalBtn").addEventListener("click", () => $("evalModal").style.display = "flex");
+
+// ── PDF Upload for Evaluation ──────────────────────────────────────
+$("uploadPdfBtn").addEventListener("click", () => $("pdfFileInput").click());
+$("pdfFileInput").addEventListener("change", async (evt) => {
+  const file = evt.target.files[0];
+  if (!file) return;
+  $("pdfUploadStatus").textContent = "Uploading & parsing PDF...";
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    const res = await apiFetch("/eval/upload-pdf", { method: "POST", body: formData });
+    if (!res || !res.ok) {
+      const e = await res.json();
+      throw new Error(e.detail || "Failed to upload PDF");
+    }
+    const data = await res.json();
+    $("pdfUploadStatus").textContent = `✓ Added ${data.pages_added} pages (${data.total_corpus_docs} total docs)`;
+    showToast(`PDF added (${data.pages_added} pages)`);
+  } catch (e) {
+    $("pdfUploadStatus").textContent = `✗ ${e.message}`;
+    showToast(e.message, "err");
+  }
+});
 
 // ── Run Evaluation ────────────────────────────────────────────────
 $("runEvalBtn").addEventListener("click", async () => {

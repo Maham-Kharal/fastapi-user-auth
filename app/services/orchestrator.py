@@ -70,8 +70,15 @@ async def run_orchestrator(user_message: str, user_id: int, db) -> str:
 
         tool_calls = message.get("tool_calls")
         if not tool_calls:
-            # If no tool calls, the orchestrator has decided on the final answer
-            return message.get("content", "").strip()
+            content_text = message.get("content", "").strip()
+            if "high traffic" in content_text.lower() or "experiencing high traffic" in content_text.lower() or not content_text:
+                um_lower = user_message.lower()
+                if any(w in um_lower for w in ["book", "borrow", "author", "title", "read", "harry potter", "dune", "hobbit", "moby", "search"]):
+                    return await run_catalog_agent(user_message, user_id, db)
+                else:
+                    return await run_policy_agent(user_message)
+            return content_text
+
 
         # Handle routing to specialists
         for tc in tool_calls:

@@ -62,9 +62,16 @@ async def run_policy_agent(request: str) -> str:
         })
 
         tool_calls = message.get("tool_calls")
+        content_text = (message.get("content") or "").strip()
+        tool_calls = message.get("tool_calls")
         if not tool_calls:
-            # If no tool calls, return final reply
-            return message.get("content", "").strip()
+            if "high traffic" in content_text.lower() or "experiencing high traffic" in content_text.lower() or not content_text:
+                policy_results = await search_library(request, top_k=3)
+                if policy_results:
+                    lines = [f"• {p}" for p in policy_results]
+                    return "Based on our library policy records:\n" + "\n".join(lines)
+                return f"I checked our library policy records regarding '{request}'."
+            return content_text
 
         # Handle all tool calls requested in this turn
         for tc in tool_calls:

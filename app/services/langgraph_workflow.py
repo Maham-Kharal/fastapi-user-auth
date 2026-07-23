@@ -24,7 +24,7 @@ from app.core.config import settings
 llm = ChatOpenAI(
     base_url="https://api.cerebras.ai/v1",
     api_key=settings.CEREBRAS_API_KEY or "DUMMY_KEY",
-    model="llama3.1-8b",
+    model=settings.CEREBRAS_MODEL,
     temperature=0.2
 )
 
@@ -256,8 +256,13 @@ async def run_langgraph_orchestrator(user_message: str, user_id: int, db) -> str
         if any(w in content_text for w in ["book", "borrow", "author", "title", "read", "harry potter", "search"]):
             from app.services.tool_dispatcher import execute_tool
             res = execute_tool("search_books", {"query": user_message}, user_id, db)
-            return "Fallback Answer: " + str(res)
+            if not res or not res.get("results"):
+                return "I searched the library catalog, but unfortunately I didn't find any matching books."
+            titles = [b["title"] for b in res["results"]]
+            return f"I found some books that match your query: {', '.join(titles)}."
         else:
             from app.services.qdrant_service import search_library
-            res = search_library(user_message)
-            return "Fallback Policy: " + str(res)
+            res = await search_library(user_message)
+            if res:
+                return f"According to library policy: {res[0]}"
+            return "I couldn't find any library policies related to that."

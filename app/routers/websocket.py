@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.core.security import decode_access_token
 from app.models.models import User
-from app.services.orchestrator import run_orchestrator as orchestrate
+from app.services.langgraph_workflow import run_langgraph_orchestrator as orchestrate
 
 router = APIRouter(tags=["chat"])
 

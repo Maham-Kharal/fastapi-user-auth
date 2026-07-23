@@ -1,6 +1,6 @@
 import asyncio
 from app.core.database import SessionLocal
-from app.services.orchestrator import run_orchestrator
+from app.services.langgraph_workflow import run_langgraph_orchestrator as run_orchestrator
 
 async def run_query(query: str, db):
     print(f"\n--- Testing Query: '{query}' ---")

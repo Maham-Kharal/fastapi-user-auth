@@ -181,7 +181,10 @@ def get_active_chunking_settings():
     return _active_settings
 
 
+from langsmith import traceable
+
 # ── Live RAG Metrics Evaluator (LLM-as-a-Judge) ──────────────────────────────
+@traceable(name="evaluator")
 async def evaluate_rag_metrics(
     query: str, retrieved_chunks: list[str], answer: str
 ) -> dict:

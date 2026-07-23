@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.services.orchestrator import orchestrate
+from app.services.langgraph_workflow import run_langgraph_orchestrator as orchestrate
 from app.core.security import get_current_user
 from app.core.database import get_db, SessionLocal
 from app.services.cache import get_cached_reply, set_cached_reply

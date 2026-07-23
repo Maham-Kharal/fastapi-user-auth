@@ -12,8 +12,11 @@ Responsibilities:
 import uuid
 import logging
 import httpx
+import hashlib
+import json
 from typing import Optional
 
+import redis as redis_lib
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import (
     Distance,
@@ -36,6 +39,42 @@ EMBEDDING_URL = (
 
 # ── Singleton Qdrant client ───────────────────────────────────────────────────
 _client: Optional[QdrantClient] = None
+
+# ── Redis cache client ────────────────────────────────────────────────────────
+CACHE_TTL_SECONDS = 3600  # 1 hour — entries expire automatically
+
+_redis_client: Optional[redis_lib.Redis] = None
+
+def get_redis_client() -> Optional[redis_lib.Redis]:
+    """
+    Return a lazy singleton Redis client connected to localhost:6379.
+    Returns None (and logs a warning) if Redis is not available so the app
+    continues working without caching — Redis is an optimisation, not a hard dep.
+    """
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+    try:
+        r = redis_lib.Redis(host="localhost", port=6379, db=0, socket_connect_timeout=1)
+        r.ping()          # fails fast if Redis is down
+        _redis_client = r
+        logger.info("Redis cache connected → localhost:6379")
+    except Exception as exc:
+        logger.warning("Redis not available — caching disabled (%s)", exc)
+        _redis_client = None
+    return _redis_client
+
+
+def _make_cache_key(query: str) -> str:
+    """
+    Produce a deterministic SHA-256 key for a normalised query string.
+    Normalisation: strip surrounding whitespace, collapse inner whitespace,
+    lowercase — so 'How many books  can I borrow?' and
+    'how many books can i borrow?' map to the same key.
+    """
+    normalised = " ".join(query.strip().lower().split())
+    digest = hashlib.sha256(normalised.encode()).hexdigest()
+    return f"rag:kb:{digest}"
 
 
 def get_qdrant_client() -> Optional[QdrantClient]:
@@ -148,19 +187,43 @@ async def upsert_documents(docs: list[dict]) -> None:
         logger.info("Upserted %d documents into '%s'.", len(points), settings.QDRANT_COLLECTION)
 
 
-# ── Semantic search (used at chat time) ──────────────────────────────────────
+# ── Semantic search with Redis exact-match caching ───────────────────────────
 async def search_library(query: str, top_k: int = 3) -> list[str]:
     """
     Perform a semantic search against the library knowledge collection.
 
-    Steps:
+    Cache layer (exact-match, Redis):
+      - The query is normalised (stripped + lowercased) and hashed with SHA-256.
+      - On a CACHE HIT  → return the stored JSON list immediately.
+        No embedding call, no Qdrant network round-trip.
+      - On a CACHE MISS → run the full pipeline (embed → Qdrant), then store
+        the result in Redis with a TTL of CACHE_TTL_SECONDS so entries expire
+        automatically without any manual cleanup.
+
+    Full pipeline steps (cache miss only):
       1. Embed the user's query with Gemini gemini-embedding-001
-      2. Send the vector to Qdrant — it returns the top_k most similar points
-         ranked by cosine similarity score (higher = more relevant)
+      2. Send the vector to Qdrant — returns top_k most similar points
       3. Extract and return the 'content' field from each matching payload
 
     Returns an empty list if Qdrant is not configured or search fails.
+    Redis being unavailable is non-fatal — the function falls through to the
+    normal pipeline transparently.
     """
+    # ── 1. Check Redis cache ──────────────────────────────────────────────────
+    redis = get_redis_client()
+    cache_key = _make_cache_key(query)
+
+    if redis is not None:
+        try:
+            cached = redis.get(cache_key)
+            if cached is not None:
+                logger.info("[Cache HIT]  key=%s  query=%r", cache_key[:16], query[:60])
+                return json.loads(cached)
+            logger.info("[Cache MISS] key=%s  query=%r", cache_key[:16], query[:60])
+        except Exception as exc:
+            logger.warning("Redis read error — falling through to Qdrant: %s", exc)
+
+    # ── 2. Full retrieval pipeline (cache miss or Redis unavailable) ──────────
     client = get_qdrant_client()
     if client is None:
         return []
@@ -179,6 +242,18 @@ async def search_library(query: str, top_k: int = 3) -> list[str]:
             content = payload.get("content", "")
             if content:
                 contexts.append(content)
+
+        # ── 3. Store result in Redis with TTL ─────────────────────────────────
+        if redis is not None and contexts:
+            try:
+                redis.set(cache_key, json.dumps(contexts), ex=CACHE_TTL_SECONDS)
+                logger.info(
+                    "[Cache SET]  key=%s  ttl=%ds  chunks=%d",
+                    cache_key[:16], CACHE_TTL_SECONDS, len(contexts)
+                )
+            except Exception as exc:
+                logger.warning("Redis write error — result not cached: %s", exc)
+
         return contexts
 
     except Exception as exc:

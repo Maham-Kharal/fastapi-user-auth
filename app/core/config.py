@@ -19,7 +19,17 @@ class Settings(BaseSettings):
     QDRANT_URL: str = ""
     QDRANT_API_KEY: str = ""
     QDRANT_COLLECTION: str = "library_knowledge"
- 
+
+    # ARQ Redis settings
+    REDIS_URL: str = "redis://127.0.0.1:6380"
+
+    # SMTP Settings
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    REPORT_EMAIL_TO: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

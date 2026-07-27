@@ -14,19 +14,80 @@ MAX_BOOKS_PER_USER = 3
 LOAN_PERIOD_DAYS = 14
 
 
+STOP_WORDS = {
+    "can", "i", "borrow", "a", "book", "books", "the", "tell", "me", "what", "are",
+    "is", "available", "availableat", "moment", "now", "please", "show", "list",
+    "get", "find", "search", "check", "for", "in", "of", "to", "okay", "so"
+}
+
+
 def search_books(args: SearchBooksArgs, db: Session) -> list[dict]:
-    results = (
-        db.query(Book)
-        .filter(
-            (Book.title.ilike(f"%{args.query}%"))
-            | (Book.author.ilike(f"%{args.query}%"))
-            | (Book.genre.ilike(f"%{args.query}%"))
+    raw_query = (args.query or "").strip().lower()
+
+    # 1. Exact or partial substring match
+    if raw_query:
+        results = (
+            db.query(Book)
+            .filter(
+                (Book.title.ilike(f"%{raw_query}%"))
+                | (Book.author.ilike(f"%{raw_query}%"))
+                | (Book.genre.ilike(f"%{raw_query}%"))
+            )
+            .all()
         )
-        .all()
-    )
+        if results:
+            return [
+                {
+                    "id": b.id,
+                    "title": b.title,
+                    "author": b.author,
+                    "available_copies": b.available_copies,
+                    "total_copies": b.total_copies,
+                }
+                for b in results
+            ]
+
+    # 2. Extract meaningful keywords after stripping stop words
+    words = [
+        w
+        for w in raw_query.replace(".", "").replace(",", "").replace("?", "").split()
+        if w not in STOP_WORDS and len(w) > 1
+    ]
+
+    if words:
+        for word in words:
+            results = (
+                db.query(Book)
+                .filter(
+                    (Book.title.ilike(f"%{word}%"))
+                    | (Book.author.ilike(f"%{word}%"))
+                    | (Book.genre.ilike(f"%{word}%"))
+                )
+                .all()
+            )
+            if results:
+                return [
+                    {
+                        "id": b.id,
+                        "title": b.title,
+                        "author": b.author,
+                        "available_copies": b.available_copies,
+                        "total_copies": b.total_copies,
+                    }
+                    for b in results
+                ]
+
+    # 3. Fallback: Return all books in the catalog
+    all_books = db.query(Book).all()
     return [
-        {"id": b.id, "title": b.title, "author": b.author, "available_copies": b.available_copies}
-        for b in results
+        {
+            "id": b.id,
+            "title": b.title,
+            "author": b.author,
+            "available_copies": b.available_copies,
+            "total_copies": b.total_copies,
+        }
+        for b in all_books
     ]
 
 def check_availability(args: CheckAvailabilityArgs, db: Session) -> dict:

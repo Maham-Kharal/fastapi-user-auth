@@ -29,4 +29,14 @@ app.include_router(websocket.router)
 app.include_router(chat.router)
 app.include_router(eval.router)
 
+from arq import create_pool
+from arq.connections import RedisSettings
+from app.core.config import settings
+
+@app.post("/trigger-report")
+async def trigger_report():
+    redis = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+    job = await redis.enqueue_job("generate_and_email_report")
+    return {"status": "queued", "job_id": job.job_id}
+
 app.mount("/static", StaticFiles(directory="static"), name="static")

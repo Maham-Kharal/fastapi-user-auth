@@ -50,16 +50,37 @@ async def run_catalog_agent(request: str, user_id: int, db) -> str:
         tool_calls = message.get("tool_calls")
         if not tool_calls:
             if "high traffic" in content_text.lower() or "experiencing high traffic" in content_text.lower() or not content_text:
-                if "borrow" in request.lower() or "my books" in request.lower():
+                req_lower = request.lower()
+                
+                # Case A: User asking to see their borrowed books
+                if "my books" in req_lower or "what books do i have" in req_lower:
                     res_data = execute_tool("get_my_borrowed_books", {}, user_id, db)
-                else:
-                    res_data = execute_tool("search_books", {"query": request}, user_id, db)
+                    books = res_data.get("results", [])
+                    if books:
+                        b_str = "\n".join([f"• '{b.get('book_title')}' (Due: {b.get('due_date')})" for b in books])
+                        return f"You currently have these books borrowed:\n{b_str}"
+                    return "You currently have no books borrowed."
 
+                # Case B: User asking to borrow a specific book (e.g. "can i borrow a book dune")
+                if "borrow" in req_lower:
+                    search_res = execute_tool("search_books", {"query": request}, user_id, db)
+                    books = search_res.get("results", [])
+                    if books:
+                        b = books[0]
+                        borrow_res = execute_tool("borrow_book", {"book_id": b["id"]}, user_id, db)
+                        if borrow_res.get("success"):
+                            return f"Yes, you can! Successfully borrowed '{borrow_res.get('book_title')}'. Due date: {borrow_res.get('due_date')}."
+                        else:
+                            return f"Found '{b.get('title')}' by {b.get('author')}, but borrowing could not be completed: {borrow_res.get('reason')}"
+                    return f"I searched the library catalog for '{request}', but could not find a matching book to borrow."
+
+                # Case C: General search or listing available books
+                res_data = execute_tool("search_books", {"query": request}, user_id, db)
                 if isinstance(res_data, dict) and "results" in res_data:
                     books = res_data["results"]
                     if isinstance(books, list) and books:
                         b_str = "\n".join([f"• '{b.get('title')}' by {b.get('author')} (Available: {b.get('available_copies')}/{b.get('total_copies')})" for b in books])
-                        return f"Based on our library catalog records:\n{b_str}"
+                        return f"Here are the matching books currently in our library catalog:\n{b_str}"
                     elif isinstance(books, list) and not books:
                         return f"I searched our library catalog for '{request}', but didn't find matching titles currently listed."
                 return f"I checked our library catalog for '{request}'."

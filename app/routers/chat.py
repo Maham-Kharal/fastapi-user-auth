@@ -265,6 +265,146 @@ def delete_session(
     db.commit()
     return {"detail": "Session deleted"}
 
+
+# ============================================================
+# Document Upload & Status Polling Endpoints
+# ============================================================
+
+from fastapi import UploadFile, File
+import os
+import uuid
+from arq import create_pool
+from arq.connections import RedisSettings
+from app.models.models import Document
+from app.services.document_parser import sniff_mime_type
+from app.services.qdrant_service import search_session_documents
+
+MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB limit
+
+
+@router.post("/sessions/{session_id}/upload")
+async def upload_session_document(
+    session_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Upload a PDF or DOCX document to a chat session for scoped RAG grounding."""
+    session = _get_owned_session(session_id, current_user, db)
+
+    # 1. Read file content & enforce size limit
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File size exceeds maximum limit of 10MB.",
+        )
+
+    # 2. Real MIME-type magic bytes sniffing
+    try:
+        mime_type = sniff_mime_type(content)
+    except ValueError as err:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(err),
+        )
+
+    # 3. Save raw file to static/uploads/
+    os.makedirs("static/uploads", exist_ok=True)
+    safe_filename = f"{uuid.uuid4().hex}_{file.filename}"
+    file_path = os.path.join("static", "uploads", safe_filename)
+
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    # 4. Insert Document record in Postgres DB
+    doc_row = Document(
+        user_id=current_user.id,
+        session_id=session.id,
+        filename=file.filename,
+        file_path=file_path,
+        file_type=mime_type,
+        file_size_bytes=len(content),
+        status="processing",
+    )
+    db.add(doc_row)
+    db.commit()
+    db.refresh(doc_row)
+
+    # 5. Enqueue ARQ ingestion job in Redis
+    try:
+        redis = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+        await redis.enqueue_job("process_document_ingestion", doc_row.id)
+    except Exception as exc:
+        logger.error("Failed to enqueue document ingestion in Redis: %s", exc)
+
+    return {
+        "document_id": doc_row.id,
+        "filename": doc_row.filename,
+        "file_type": doc_row.file_type,
+        "file_size_bytes": doc_row.file_size_bytes,
+        "status": doc_row.status,
+    }
+
+
+@router.get("/sessions/{session_id}/documents/{document_id}/status")
+def get_document_status(
+    session_id: int,
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Poll document processing status."""
+    session = _get_owned_session(session_id, current_user, db)
+    doc = (
+        db.query(Document)
+        .filter(
+            Document.id == document_id,
+            Document.session_id == session.id,
+            Document.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    return {
+        "document_id": doc.id,
+        "filename": doc.filename,
+        "status": doc.status,
+        "error_message": doc.error_message,
+        "created_at": doc.created_at,
+    }
+
+
+@router.get("/sessions/{session_id}/documents")
+def list_session_documents(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List all documents uploaded to a session."""
+    session = _get_owned_session(session_id, current_user, db)
+    docs = (
+        db.query(Document)
+        .filter(Document.session_id == session.id, Document.user_id == current_user.id)
+        .order_by(Document.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": d.id,
+            "filename": d.filename,
+            "file_type": d.file_type,
+            "file_size_bytes": d.file_size_bytes,
+            "status": d.status,
+            "error_message": d.error_message,
+            "created_at": d.created_at,
+        }
+        for d in docs
+    ]
+
+
 @router.post("/sessions/{session_id}/stream")
 async def stream_message(
     session_id: int,
@@ -298,18 +438,51 @@ async def stream_message(
         return StreamingResponse(blocked_generator(), media_type="text/event-stream")
     # --- end guardrail check ---
 
-    # RAG Context Retrieval using active chunking settings
+    # Check for session uploaded documents
+    completed_docs = (
+        db.query(Document)
+        .filter(
+            Document.session_id == session.id,
+            Document.user_id == current_user.id,
+            Document.status == "completed",
+        )
+        .all()
+    )
+
     rag_context_parts = []
-    try:
-        active_settings = get_active_chunking_settings()
-        # Retrieve top_k based on active configuration (default 3)
-        top_k = active_settings.get("top_k", 3)
-        rag_context_parts = await search_library(payload.content, top_k=top_k)
-    except Exception as e:
-        logger.warning("RAG context lookup failed: %s", e)
+    scoped_doc_chunks = []
+
+    if completed_docs:
+        # Perform metadata-scoped search strictly isolated to this session_id and user_id
+        try:
+            scoped_doc_chunks = await search_session_documents(
+                payload.content, session.id, current_user.id, top_k=4
+            )
+            rag_context_parts = [c["content"] for c in scoped_doc_chunks]
+        except Exception as e:
+            logger.warning("Scoped document RAG search failed: %s", e)
+    else:
+        # Fall back to global library search
+        try:
+            active_settings = get_active_chunking_settings()
+            top_k = active_settings.get("top_k", 3)
+            rag_context_parts = await search_library(payload.content, top_k=top_k)
+        except Exception as e:
+            logger.warning("RAG context lookup failed: %s", e)
 
     system_prompt = SYSTEM_PROMPT
-    if rag_context_parts:
+    if scoped_doc_chunks:
+        context_block = "\n".join(
+            f"[{c['source']}, {c['section']}]: {c['content']}" for c in scoped_doc_chunks
+        )
+        system_prompt = (
+            "You are a helpful assistant grounding your answers in the user's uploaded document.\n"
+            "Use ONLY the document excerpts below to answer the user's question accurately.\n"
+            "Cite your source for every claim using the format [Filename, Page X] or [Filename, Section Y].\n\n"
+            "Document Excerpts:\n"
+            + context_block
+        )
+    elif rag_context_parts:
         context_block = "\n".join(f"- {c}" for c in rag_context_parts)
         system_prompt = (
             SYSTEM_PROMPT
@@ -324,15 +497,39 @@ async def stream_message(
     async def event_generator():
         full_reply = ""
         stream_error = None
-        rag_context_parts = []  # kept for the metadata card; orchestrator handles retrieval internally now
         start_time = time.time()
-        try:
-            full_reply = await orchestrate(payload.content, current_user.id, db)
-            yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
-        except Exception as e:
-            stream_error = str(e)
-            full_reply = f"⚠ {stream_error}"
-            yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
+
+        if completed_docs:
+            if scoped_doc_chunks:
+                # Direct grounded answer using Gemini / Cerebras with document system prompt
+                try:
+                    res = await call_cerebras(
+                        messages=history,
+                        system_prompt=system_prompt,
+                        temperature=0.2,
+                    )
+                    choices = res.get("choices", [])
+                    if choices:
+                        full_reply = choices[0].get("message", {}).get("content", "")
+                    else:
+                        full_reply = "I couldn't generate a grounded answer from the uploaded document."
+                    yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
+                except Exception as e:
+                    stream_error = str(e)
+                    full_reply = f"⚠ Document QA Error: {stream_error}"
+                    yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
+            else:
+                doc_name = completed_docs[0].filename
+                full_reply = f"I searched your uploaded document ('{doc_name}'), but could not find information relevant to your question."
+                yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
+        else:
+            try:
+                full_reply = await orchestrate(payload.content, current_user.id, db)
+                yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
+            except Exception as e:
+                stream_error = str(e)
+                full_reply = f"⚠ {stream_error}"
+                yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
 
         elapsed = time.time() - start_time
 
@@ -345,20 +542,18 @@ async def stream_message(
             finally:
                 save_db.close()
 
-        # Grade RAG quality metrics — always send even if this fails
+        # Grade RAG quality metrics
         try:
             metrics = await evaluate_rag_metrics(payload.content, rag_context_parts, full_reply)
         except Exception as e:
             logger.warning("evaluate_rag_metrics failed: %s", e)
             metrics = {"context_relevance": 0.0, "groundedness": 0.0, "answer_relevance": 0.0}
 
-        # Estimate tokens and cost
         history_char_count = sum(len(m["content"]) for m in history)
         prompt_tokens = int((len(system_prompt) + history_char_count) / 4)
         completion_tokens = int(len(full_reply) / 4)
         cost_usd = (prompt_tokens / 1_000_000) * 0.30 + (completion_tokens / 1_000_000) * 2.50
 
-        # Always send the metadata block — RAG metrics card depends on this
         metadata = {
             "latency_seconds": round(elapsed, 2),
             "prompt_tokens": prompt_tokens,

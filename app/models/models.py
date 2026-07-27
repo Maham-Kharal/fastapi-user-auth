@@ -52,6 +52,33 @@ class ChatSession(Base):
         cascade="all, delete-orphan"
     )
 
+    documents = relationship(
+        "Document",
+        back_populates="session",
+        cascade="all, delete-orphan"
+    )
+
+
+# ======================
+# Document Model
+# ======================
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    session_id = Column(Integer, ForeignKey("chat_sessions.id"), nullable=False)
+    filename = Column(String(255), nullable=False)
+    file_path = Column(String(512), nullable=False)
+    file_type = Column(String(10), nullable=False)  # 'pdf' or 'docx'
+    file_size_bytes = Column(Integer, nullable=False)
+    status = Column(String(20), nullable=False, default="processing")  # processing, completed, failed
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    session = relationship("ChatSession", back_populates="documents")
+
 
 # ======================
 # Chat Message Model

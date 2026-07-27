@@ -194,8 +194,90 @@ async def generate_and_email_report(ctx):
     return {"status": "success", "pdf_size_bytes": len(pdf_bytes), "stats": stats}
 
 
+from app.core.database import SessionLocal
+from app.models.models import Document
+from app.services.document_parser import extract_pdf_chunks, extract_docx_chunks
+from app.services.qdrant_service import upsert_documents
+
+
+async def process_document_ingestion(ctx, document_id: int):
+    """ARQ background task to extract, chunk, embed, and index uploaded PDF/DOCX files into Qdrant."""
+    logger.info("ARQ Ingestion Worker: Starting task for document_id=%d", document_id)
+    db = SessionLocal()
+    try:
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if not doc:
+            logger.error("Document id=%d not found in database.", document_id)
+            return {"status": "failed", "reason": "Document not found"}
+
+        if not os.path.exists(doc.file_path):
+            doc.status = "failed"
+            doc.error_message = f"File not found at path: {doc.file_path}"
+            db.commit()
+            return {"status": "failed", "reason": doc.error_message}
+
+        # 1. Extract text & chunks based on file format
+        if doc.file_type == "pdf":
+            raw_chunks = extract_pdf_chunks(doc.file_path, doc.filename)
+        elif doc.file_type == "docx":
+            raw_chunks = extract_docx_chunks(doc.file_path, doc.filename)
+        else:
+            doc.status = "failed"
+            doc.error_message = f"Unsupported file type: {doc.file_type}"
+            db.commit()
+            return {"status": "failed", "reason": doc.error_message}
+
+        if not raw_chunks:
+            doc.status = "failed"
+            doc.error_message = "No readable text extracted from document."
+            db.commit()
+            return {"status": "failed", "reason": doc.error_message}
+
+        # 2. Attach strict metadata payload for session/user isolation
+        points_payloads = []
+        for chunk in raw_chunks:
+            points_payloads.append({
+                "text": chunk["content"],
+                "content": chunk["content"],
+                "document_id": doc.id,
+                "user_id": doc.user_id,
+                "session_id": doc.session_id,
+                "source": doc.filename,
+                "page_number": chunk.get("page_number", 1),
+                "section": chunk.get("section", "General"),
+            })
+
+        # 3. Embed and upsert into Qdrant
+        await upsert_documents(points_payloads)
+
+        # 4. Mark document as completed
+        doc.status = "completed"
+        doc.error_message = None
+        db.commit()
+
+        logger.info(
+            "ARQ Ingestion Worker: Successfully indexed document_id=%d ('%s') with %d chunks into Qdrant.",
+            doc.id, doc.filename, len(points_payloads)
+        )
+        return {"status": "completed", "document_id": doc.id, "chunks_count": len(points_payloads)}
+
+    except Exception as exc:
+        logger.error("ARQ Ingestion Worker failed for document_id=%d: %s", document_id, exc)
+        try:
+            doc = db.query(Document).filter(Document.id == document_id).first()
+            if doc:
+                doc.status = "failed"
+                doc.error_message = str(exc)
+                db.commit()
+        except Exception:
+            pass
+        return {"status": "failed", "error": str(exc)}
+    finally:
+        db.close()
+
+
 class WorkerSettings:
-    functions = [generate_and_email_report]
+    functions = [generate_and_email_report, process_document_ingestion]
     # For testing: run every minute (minute=None or minute=set(range(60)) fires every minute in ARQ cron)
     # Production schedule: cron(generate_and_email_report, hour=7, minute=0)
     cron_jobs = [

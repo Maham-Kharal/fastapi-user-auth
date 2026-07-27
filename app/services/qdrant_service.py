@@ -123,10 +123,13 @@ async def embed_text(text: str) -> list[float]:
 
 
 # ── Collection management ─────────────────────────────────────────────────────
+from qdrant_client.http.models import PayloadSchemaType
+
+
 def ensure_collection_exists(client: QdrantClient) -> None:
     """
-    Create the Qdrant collection if it does not exist.
-    Uses COSINE distance over 768-dimensional vectors (matching text-embedding-004).
+    Create the Qdrant collection and payload indexes for session_id & user_id filtering.
+    Uses COSINE distance over 768-dimensional vectors.
     """
     existing = [c.name for c in client.get_collections().collections]
     if settings.QDRANT_COLLECTION not in existing:
@@ -138,8 +141,19 @@ def ensure_collection_exists(client: QdrantClient) -> None:
             ),
         )
         logger.info("Created Qdrant collection '%s'", settings.QDRANT_COLLECTION)
-    else:
-        logger.info("Qdrant collection '%s' already exists.", settings.QDRANT_COLLECTION)
+
+    # Ensure payload indexes exist for session_id and user_id filters
+    for field in ["session_id", "user_id"]:
+        try:
+            client.create_payload_index(
+                collection_name=settings.QDRANT_COLLECTION,
+                field_name=field,
+                field_schema=PayloadSchemaType.INTEGER,
+            )
+            logger.info("Created Qdrant payload index for '%s'", field)
+        except Exception as exc:
+            # Index might already exist
+            pass
 
 
 # ── Upsert (used by seed script) ──────────────────────────────────────────────
@@ -258,4 +272,66 @@ async def search_library(query: str, top_k: int = 3) -> list[str]:
 
     except Exception as exc:
         logger.warning("Qdrant search failed: %s — skipping RAG context.", exc)
+        return []
+
+
+from qdrant_client.http.models import FieldCondition, MatchValue
+
+
+async def search_session_documents(
+    query: str,
+    session_id: int,
+    user_id: int,
+    top_k: int = 4,
+) -> list[dict]:
+    """
+    Perform a metadata-scoped vector search strictly filtered by session_id and user_id.
+    Guarantees zero cross-session or cross-tenant document leakage.
+    Returns list of matching chunk metadata dictionaries containing content, source, page_number/section.
+    """
+    client = get_qdrant_client()
+    if client is None:
+        return []
+
+    try:
+        query_vector = await embed_text(query)
+        search_filter = Filter(
+            must=[
+                FieldCondition(key="session_id", match=MatchValue(value=session_id)),
+                FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+            ]
+        )
+        results = client.query_points(
+            collection_name=settings.QDRANT_COLLECTION,
+            query=query_vector,
+            query_filter=search_filter,
+            limit=top_k,
+        )
+
+        matched_chunks = []
+        for pt in results.points:
+            p = pt.payload or {}
+            content = p.get("content", "")
+            if content:
+                matched_chunks.append(
+                    {
+                        "content": content,
+                        "source": p.get("source", "Document"),
+                        "page_number": p.get("page_number", 1),
+                        "section": p.get("section", "General"),
+                        "document_id": p.get("document_id"),
+                        "score": round(pt.score, 4) if hasattr(pt, "score") and pt.score else None,
+                    }
+                )
+
+        logger.info(
+            "Scoped search [session_id=%d, user_id=%d] returned %d matching chunks",
+            session_id,
+            user_id,
+            len(matched_chunks),
+        )
+        return matched_chunks
+
+    except Exception as exc:
+        logger.warning("Scoped session document search failed: %s", exc)
         return []

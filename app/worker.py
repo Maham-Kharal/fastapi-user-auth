@@ -1,4 +1,5 @@
 import io
+import os
 import logging
 from datetime import datetime, timedelta
 from email import encoders
@@ -138,6 +139,17 @@ async def generate_and_email_report(ctx):
     # 2. Build PDF in memory
     pdf_bytes = build_pdf_in_memory(yesterday_str, stats)
     logger.info(f"Built PDF in memory successfully ({len(pdf_bytes)} bytes)")
+
+    # 2b. Save PDF copy to disk in static/reports/
+    os.makedirs("static/reports", exist_ok=True)
+    report_filename = f"library_report_{yesterday_str}.pdf"
+    saved_pdf_path = os.path.join("static", "reports", report_filename)
+    try:
+        with open(saved_pdf_path, "wb") as f:
+            f.write(pdf_bytes)
+        logger.info(f"Saved PDF copy to disk at: {saved_pdf_path}")
+    except Exception as err:
+        logger.warning(f"Failed to save PDF copy to disk: {err}")
 
     # 3. Email PDF as attachment
     recipient = settings.REPORT_EMAIL_TO or "admin@library.com"

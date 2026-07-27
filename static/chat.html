@@ -353,8 +353,15 @@ input[type=range]::-webkit-slider-thumb{
     </div>
   </div>
   <div id="inputBar">
-    <textarea id="messageInput" rows="1" placeholder="Ask about books, borrowing, library hours…" disabled></textarea>
+    <input type="file" id="sessionFileInput" accept=".pdf,.docx" style="display:none"/>
+    <button id="sessionUploadBtn" title="Upload PDF or DOCX to this chat session" disabled style="padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);color:var(--accent2);font-size:14px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all .15s;font-family:'Inter',sans-serif">
+      <span style="font-size:16px">📎</span> Upload File
+    </button>
+    <textarea id="messageInput" rows="1" placeholder="Ask about books or your uploaded document…" disabled></textarea>
     <button id="sendBtn" disabled><span class="send-icon">⚡</span>Send</button>
+  </div>
+  <div id="docUploadBanner" style="display:none;padding:6px 22px;background:rgba(124,111,247,.12);border-top:1px solid var(--border);font-size:12px;color:var(--accent2);display:flex;align-items:center;justify-content:space-between">
+    <span id="docUploadBannerText">📄 Uploading document...</span>
   </div>
 </div>
 
@@ -529,7 +536,7 @@ async function deleteSession(id){
   if(!res||!res.ok){ showToast("Failed to delete","err"); return; }
   if(currentSessionId===id){
     currentSessionId=null; headerTitle.textContent="Select or start a conversation";
-    messageInput.disabled=true; sendBtn.disabled=true;
+    messageInput.disabled=true; sendBtn.disabled=true; $("sessionUploadBtn").disabled=true;
     messagesEl.innerHTML='<div id="emptyState"><div class="empty-icon">📚</div><div class="empty-title">No conversation selected</div></div>';
   }
   await loadSessions();
@@ -538,7 +545,7 @@ async function deleteSession(id){
 
 async function selectSession(id, title){
   currentSessionId=id; headerTitle.textContent=title;
-  messageInput.disabled=false; sendBtn.disabled=false;
+  messageInput.disabled=false; sendBtn.disabled=false; $("sessionUploadBtn").disabled=false;
   [...sessionListEl.children].forEach(li => li.classList.toggle("active", Number(li.dataset.id)===id));
   const res = await apiFetch(`/chat/sessions/${id}/messages`); if(!res) return;
   renderMessages(await res.json());
@@ -808,6 +815,62 @@ $("pdfFileInput").addEventListener("change", async (evt) => {
   } catch (e) {
     $("pdfUploadStatus").textContent = `✗ ${e.message}`;
     showToast(e.message, "err");
+  }
+});
+
+// ── Chat Session Document Upload & Status Polling ─────────────────
+$("sessionUploadBtn").addEventListener("click", () => $("sessionFileInput").click());
+$("sessionFileInput").addEventListener("change", async (evt) => {
+  const file = evt.target.files[0];
+  if (!file || !currentSessionId) return;
+  
+  const banner = $("docUploadBanner");
+  const bannerText = $("docUploadBannerText");
+  banner.style.display = "flex";
+  bannerText.textContent = `⏳ Uploading and sniffing '${file.name}'...`;
+  showToast(`Uploading '${file.name}'...`);
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const res = await apiFetch(`/chat/sessions/${currentSessionId}/upload`, { method: "POST", body: formData });
+    if (!res || !res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Upload failed");
+    }
+    const docData = await res.json();
+    const docId = docData.document_id;
+    bannerText.textContent = `⚙ Parsing & indexing '${file.name}' via ARQ background worker...`;
+
+    let attempts = 0;
+    const pollInterval = setInterval(async () => {
+      attempts++;
+      const statusRes = await apiFetch(`/chat/sessions/${currentSessionId}/documents/${docId}/status`);
+      if (statusRes && statusRes.ok) {
+        const s = await statusRes.json();
+        if (s.status === "completed") {
+          clearInterval(pollInterval);
+          bannerText.textContent = `✅ Document '${file.name}' successfully indexed! Answers will now be grounded in this file.`;
+          showToast(`'${file.name}' indexed successfully!`);
+          setTimeout(() => { banner.style.display = "none"; }, 6000);
+        } else if (s.status === "failed") {
+          clearInterval(pollInterval);
+          bannerText.textContent = `❌ Ingestion failed: ${s.error_message || "Unknown error"}`;
+          showToast(`Ingestion failed: ${s.error_message}`, "err");
+        }
+      }
+      if (attempts > 30) {
+        clearInterval(pollInterval);
+        bannerText.textContent = `⚠️ Processing taking longer than expected. Check ARQ worker.`;
+      }
+    }, 1500);
+
+  } catch (err) {
+    bannerText.textContent = `❌ Upload failed: ${err.message}`;
+    showToast(err.message, "err");
+  } finally {
+    evt.target.value = "";
   }
 });
 

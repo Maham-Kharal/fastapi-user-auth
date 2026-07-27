@@ -281,6 +281,6 @@ class WorkerSettings:
     # For testing: run every minute (minute=None or minute=set(range(60)) fires every minute in ARQ cron)
     # Production schedule: cron(generate_and_email_report, hour=7, minute=0)
     cron_jobs = [
-        cron(generate_and_email_report, minute=set(range(60)))
+        cron(generate_and_email_report,hour=7, minute=0),  # Daily at 7:00 AM UTC)
     ]
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)

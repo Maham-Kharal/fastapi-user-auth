@@ -157,20 +157,12 @@ def ensure_collection_exists(client: QdrantClient) -> None:
 
 
 # ── Upsert (used by seed script) ──────────────────────────────────────────────
+import asyncio
+
+
 async def upsert_documents(docs: list[dict]) -> None:
     """
-    Embed and store a list of documents into Qdrant.
-
-    Each doc should be a dict with at least a 'text' key containing the
-    content to embed, plus any metadata fields you want stored in the payload.
-
-    Example doc:
-        {
-            "text": "Harry Potter — Fantasy — A young wizard discovers...",
-            "title": "Harry Potter",
-            "author": "J.K. Rowling",
-            "genre": "Fantasy"
-        }
+    Embed and store a list of documents into Qdrant concurrently.
     """
     client = get_qdrant_client()
     if client is None:
@@ -179,12 +171,16 @@ async def upsert_documents(docs: list[dict]) -> None:
 
     ensure_collection_exists(client)
 
+    valid_docs = [d for d in docs if d.get("text", "").strip()]
+    if not valid_docs:
+        return
+
+    # Embed all text chunks concurrently via asyncio.gather
+    texts = [d["text"] for d in valid_docs]
+    vectors = await asyncio.gather(*[embed_text(t) for t in texts])
+
     points: list[PointStruct] = []
-    for doc in docs:
-        text = doc.get("text", "")
-        if not text:
-            continue
-        vector = await embed_text(text)
+    for doc, vector in zip(valid_docs, vectors):
         points.append(
             PointStruct(
                 id=str(uuid.uuid4()),

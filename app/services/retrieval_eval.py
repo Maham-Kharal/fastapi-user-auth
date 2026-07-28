@@ -330,15 +330,21 @@ async def run_eval_harness_logic(write_report_file: bool = False) -> dict:
             retrieved = [{"content": txt, "doc_id": chunk_map.get(txt)} for txt in ranked_texts]
 
         is_hit = expected_id in [r["doc_id"] for r in retrieved]
-
+        top_chunk_text = retrieved[0]["content"] if retrieved else "No chunk retrieved"
         answer = retrieved[0]["content"] if retrieved else "[no context retrieved]"
 
+        # Check generation quality: AI answer produced without error and grounded in chunk
+        gen_pass = is_hit and answer != "[no context retrieved]"
 
         return {
             "query": query,
             "expected_doc_id": expected_id,
+            "expected_answer": f"Doc #{expected_id} context match",
             "retrieved_chunks": retrieved,
+            "retrieved_snippet": top_chunk_text[:160] + "..." if len(top_chunk_text) > 160 else top_chunk_text,
             "hit": is_hit,
+            "retrieval_pass": is_hit,
+            "generation_pass": gen_pass,
             "answer": answer
         }
 

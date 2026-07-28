@@ -196,12 +196,17 @@ async def generate_and_email_report(ctx):
 
 from app.core.database import SessionLocal
 from app.models.models import Document
-from app.services.document_parser import extract_pdf_chunks, extract_docx_chunks
+from app.services.document_parser import (
+    extract_pdf_chunks,
+    extract_docx_chunks,
+    extract_txt_chunks,
+    extract_pptx_chunks,
+)
 from app.services.qdrant_service import upsert_documents
 
 
 async def process_document_ingestion(ctx, document_id: int):
-    """ARQ background task to extract, chunk, embed, and index uploaded PDF/DOCX files into Qdrant."""
+    """ARQ background task to extract, chunk, embed, and index uploaded PDF/DOCX/PPTX/TXT files into Qdrant."""
     logger.info("ARQ Ingestion Worker: Starting task for document_id=%d", document_id)
     db = SessionLocal()
     try:
@@ -221,6 +226,10 @@ async def process_document_ingestion(ctx, document_id: int):
             raw_chunks = extract_pdf_chunks(doc.file_path, doc.filename)
         elif doc.file_type == "docx":
             raw_chunks = extract_docx_chunks(doc.file_path, doc.filename)
+        elif doc.file_type == "txt":
+            raw_chunks = extract_txt_chunks(doc.file_path, doc.filename)
+        elif doc.file_type == "pptx":
+            raw_chunks = extract_pptx_chunks(doc.file_path, doc.filename)
         else:
             doc.status = "failed"
             doc.error_message = f"Unsupported file type: {doc.file_type}"

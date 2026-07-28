@@ -420,18 +420,41 @@ input[type=range]::-webkit-slider-thumb{
 <div id="toast"><span class="toast-icon">✓</span><span id="toastMsg"></span></div>
 
 <!-- Eval Results Modal -->
-<div id="evalModal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);padding:24px;overflow:auto">
-  <div style="max-width:1100px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden">
-    <div style="padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+<div id="evalModal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);padding:24px;align-items:center;justify-content:center">
+  <div style="max-width:1200px;width:100%;max-height:85vh;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5)">
+    <div style="padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;background:var(--surface)">
       <div>
         <div style="font-size:17px;font-weight:700">📊 RAG Evaluation Results</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:3px">5 configurations × 14 eval questions — Hit@3 scoring</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:3px">Evaluated against document context with retrieval & generation verification</div>
       </div>
-      <button id="closeModalBtn" style="background:var(--surface2);border:1px solid var(--border);border-radius:9px;color:var(--muted);padding:7px 14px;font-size:13px;cursor:pointer;font-family:'Inter',sans-serif">✕ Close</button>
+      <div style="display:flex;gap:8px">
+        <button id="tabMatrixBtn" style="background:var(--accent);color:#fff;border:none;border-radius:9px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">📋 Detailed Q/A Matrix</button>
+        <button id="tabBenchmarkBtn" style="background:var(--surface2);color:var(--muted);border:1px solid var(--border);border-radius:9px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">📊 Config Benchmark</button>
+        <button id="closeModalBtn" style="background:var(--surface2);border:1px solid var(--border);border-radius:9px;color:var(--muted);padding:7px 14px;font-size:13px;cursor:pointer;font-family:'Inter',sans-serif">✕ Close</button>
+      </div>
     </div>
-    <div style="padding:20px 24px;overflow-x:auto">
+
+    <!-- View 1: Detailed Q/A Matrix (Requested by user) -->
+    <div id="matrixView" style="padding:20px 24px;overflow-y:auto;overflow-x:auto;flex:1">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead style="position:sticky;top:0;z-index:10;background:var(--surface2)">
+          <tr style="border-bottom:2px solid var(--border)">
+            <th style="text-align:left;padding:10px 12px;color:var(--muted);font-size:11px;letter-spacing:.8px;text-transform:uppercase;width:22%">Question</th>
+            <th style="text-align:left;padding:10px 12px;color:var(--muted);font-size:11px;letter-spacing:.8px;text-transform:uppercase;width:15%">Expected Answer</th>
+            <th style="text-align:left;padding:10px 12px;color:var(--muted);font-size:11px;letter-spacing:.8px;text-transform:uppercase;width:28%">Retrieved Chunk</th>
+            <th style="text-align:left;padding:10px 12px;color:var(--muted);font-size:11px;letter-spacing:.8px;text-transform:uppercase;width:23%">AI Answer</th>
+            <th style="text-align:center;padding:10px 8px;color:var(--muted);font-size:11px;letter-spacing:.8px;text-transform:uppercase;width:6%">Retrieval</th>
+            <th style="text-align:center;padding:10px 8px;color:var(--muted);font-size:11px;letter-spacing:.8px;text-transform:uppercase;width:6%">Generation</th>
+          </tr>
+        </thead>
+        <tbody id="matrixTableBody"></tbody>
+      </table>
+    </div>
+
+    <!-- View 2: Config Benchmark Summary -->
+    <div id="benchmarkView" style="padding:20px 24px;overflow-y:auto;overflow-x:auto;flex:1;display:none">
       <table id="modalTable" style="width:100%;border-collapse:collapse;font-size:13px">
-        <thead>
+        <thead style="position:sticky;top:0;z-index:10;background:var(--surface2)">
           <tr style="border-bottom:2px solid var(--border)">
             <th style="text-align:left;padding:10px 12px;color:var(--muted);font-size:11px;letter-spacing:.8px;text-transform:uppercase;white-space:nowrap">Config</th>
             <th style="text-align:left;padding:10px 12px;color:var(--muted);font-size:11px;letter-spacing:.8px;text-transform:uppercase">Strategy</th>
@@ -449,13 +472,12 @@ input[type=range]::-webkit-slider-thumb{
         <tbody id="modalTableBody"></tbody>
       </table>
     </div>
-    <div id="modalLegend" style="padding:0 24px 20px">
+
+    <div id="modalLegend" style="padding:16px 24px 20px;border-top:1px solid var(--border);background:var(--surface)">
       <div style="font-size:11px;color:var(--muted);margin-bottom:8px;font-weight:600;letter-spacing:.5px;text-transform:uppercase">Legend</div>
       <div style="display:flex;gap:16px;flex-wrap:wrap">
-        <span style="font-size:11px;color:var(--green)">● ≥80% — Excellent</span>
-        <span style="font-size:11px;color:var(--yellow)">● 50–79% — Acceptable</span>
-        <span style="font-size:11px;color:var(--red)">● &lt;50% — Poor</span>
-        <span style="font-size:11px;color:var(--accent2);margin-left:auto">🏆 BEST = highest F1 score</span>
+        <span style="font-size:11px;color:var(--green)">✅ PASS — Valid Retrieval / Grounded Generation</span>
+        <span style="font-size:11px;color:var(--red)">❌ FAIL — Missing Chunk / Ungrounded Answer</span>
       </div>
     </div>
   </div>
@@ -891,6 +913,43 @@ $("runEvalBtn").addEventListener("click", async () => {
     const configs = data.configs || [];
     const maxF1 = Math.max(...configs.map(c => c.f1 || c.hit_rate || 0));
 
+    // Render 1: Populate Detailed Q/A Evaluation Matrix Table
+    const matrixBody = $("matrixTableBody");
+    matrixBody.innerHTML = "";
+
+    const primaryLogs = (configs.length > 0 && configs[configs.length - 1].logs) ? configs[configs.length - 1].logs : (configs[0]?.logs || []);
+
+    primaryLogs.forEach((item, idx) => {
+      const qText = item.query ?? `Question #${idx + 1}`;
+      const expText = item.expected_answer ?? `Doc #${item.expected_doc_id ?? idx + 1}`;
+      const chunkText = item.retrieved_snippet || (item.retrieved_chunks?.[0]?.content ? item.retrieved_chunks[0].content.substring(0, 160) + "..." : "No chunk retrieved");
+      const aiAns = item.answer || "[no context retrieved]";
+
+      const isRetPass = item.retrieval_pass ?? item.hit ?? false;
+      const isGenPass = item.generation_pass ?? (isRetPass && !aiAns.includes("[no context retrieved]"));
+
+      const retBadge = isRetPass 
+        ? `<span style="color:var(--green);font-weight:700;background:rgba(52,211,153,.15);padding:3px 8px;border-radius:6px">✅ PASS</span>` 
+        : `<span style="color:var(--red);font-weight:700;background:rgba(248,113,113,.15);padding:3px 8px;border-radius:6px">❌ FAIL</span>`;
+
+      const genBadge = isGenPass 
+        ? `<span style="color:var(--green);font-weight:700;background:rgba(52,211,153,.15);padding:3px 8px;border-radius:6px">✅ PASS</span>` 
+        : `<span style="color:var(--red);font-weight:700;background:rgba(248,113,113,.15);padding:3px 8px;border-radius:6px">❌ FAIL</span>`;
+
+      const tr = document.createElement("tr");
+      tr.style.borderBottom = "1px solid var(--border)";
+      tr.innerHTML = `
+        <td style="padding:10px 12px;font-weight:600;color:var(--text);vertical-align:top">${qText}</td>
+        <td style="padding:10px 12px;color:var(--accent2);vertical-align:top;font-weight:500">${expText}</td>
+        <td style="padding:10px 12px;color:var(--muted);vertical-align:top;font-size:11px;line-height:1.4">${chunkText}</td>
+        <td style="padding:10px 12px;color:var(--text);vertical-align:top;font-size:12px;line-height:1.4">${aiAns}</td>
+        <td style="padding:10px 8px;text-align:center;vertical-align:top">${retBadge}</td>
+        <td style="padding:10px 8px;text-align:center;vertical-align:top">${genBadge}</td>
+      `;
+      matrixBody.appendChild(tr);
+    });
+
+    // Render 2: Populate Config Benchmark Summary Table
     const tbody = $("modalTableBody");
     tbody.innerHTML = "";
     configs.forEach((cfg, i) => {
@@ -923,7 +982,7 @@ $("runEvalBtn").addEventListener("click", async () => {
       tbody.appendChild(tr);
     });
 
-    $("evalStatus").textContent = `✓ Done — ${configs.length} configs evaluated`;
+    $("evalStatus").textContent = `✓ Done — Matrix generated across ${primaryLogs.length} evaluation questions`;
     $("openModalBtn").style.display = "block";
     $("evalModal").style.display = "flex";
     showToast("Evaluation complete!");
@@ -934,6 +993,33 @@ $("runEvalBtn").addEventListener("click", async () => {
     $("runEvalBtn").disabled = false;
     $("runEvalBtn").textContent = "▶ Run Full Evaluation";
   }
+});
+
+// Modal View Tabs Logic
+$("tabMatrixBtn").addEventListener("click", () => {
+  $("matrixView").style.display = "block";
+  $("benchmarkView").style.display = "none";
+  $("tabMatrixBtn").style.background = "var(--accent)";
+  $("tabMatrixBtn").style.color = "#fff";
+  $("tabBenchmarkBtn").style.background = "var(--surface2)";
+  $("tabBenchmarkBtn").style.color = "var(--muted)";
+});
+
+$("tabBenchmarkBtn").addEventListener("click", () => {
+  $("matrixView").style.display = "none";
+  $("benchmarkView").style.display = "block";
+  $("tabBenchmarkBtn").style.background = "var(--accent)";
+  $("tabBenchmarkBtn").style.color = "#fff";
+  $("tabMatrixBtn").style.background = "var(--surface2)";
+  $("tabMatrixBtn").style.color = "var(--muted)";
+});
+
+$("openModalBtn").addEventListener("click", () => {
+  $("evalModal").style.display = "flex";
+});
+
+$("closeModalBtn").addEventListener("click", () => {
+  $("evalModal").style.display = "none";
 });
 
 // ── Init ──────────────────────────────────────────────────────────

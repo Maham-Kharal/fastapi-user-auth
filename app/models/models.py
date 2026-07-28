@@ -71,7 +71,7 @@ class Document(Base):
     session_id = Column(Integer, ForeignKey("chat_sessions.id"), nullable=False)
     filename = Column(String(255), nullable=False)
     file_path = Column(String(512), nullable=False)
-    file_type = Column(String(10), nullable=False)  # 'pdf' or 'docx'
+    file_type = Column(String(10), nullable=False)  # 'pdf', 'docx', 'txt', 'pptx'
     file_size_bytes = Column(Integer, nullable=False)
     status = Column(String(20), nullable=False, default="processing")  # processing, completed, failed
     error_message = Column(Text, nullable=True)

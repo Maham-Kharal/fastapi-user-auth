@@ -141,11 +141,24 @@ def extract_docx_chunks(file_path: str, filename: str, chunk_size: int = 500, ov
 
 
 def extract_txt_chunks(file_path: str, filename: str, chunk_size: int = 500, overlap: int = 100) -> List[Dict[str, Any]]:
-    """Extract text from TXT file and return overlapping chunks."""
+    """Extract text from TXT file and return overlapping chunks with rate-limit protection."""
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
         text_content = f.read()
 
-    text_chunks = _chunk_text(text_content, chunk_size, overlap)
+    # Dynamically scale chunk size for large text files (>50KB) to prevent generating 10,000+ chunks
+    if len(text_content) > 50000:
+        effective_chunk_size = max(chunk_size, len(text_content) // 150)
+        effective_overlap = min(overlap, effective_chunk_size // 5)
+    else:
+        effective_chunk_size = chunk_size
+        effective_overlap = overlap
+
+    text_chunks = _chunk_text(text_content, effective_chunk_size, effective_overlap)
+    
+    # Cap maximum chunks to 300 to ensure fast, reliable embedding
+    if len(text_chunks) > 300:
+        text_chunks = text_chunks[:300]
+
     chunks = [
         {
             "content": chunk,
@@ -156,7 +169,7 @@ def extract_txt_chunks(file_path: str, filename: str, chunk_size: int = 500, ove
         for chunk in text_chunks
     ]
 
-    logger.info("Extracted %d chunks from TXT '%s'.", len(chunks), filename)
+    logger.info("Extracted %d chunks from TXT '%s' (content length: %d chars).", len(chunks), filename, len(text_content))
     return chunks
 
 

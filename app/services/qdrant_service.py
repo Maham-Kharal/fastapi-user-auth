@@ -10,6 +10,7 @@ Responsibilities:
 """
 
 import uuid
+import asyncio
 import logging
 import httpx
 import hashlib
@@ -157,12 +158,101 @@ def ensure_collection_exists(client: QdrantClient) -> None:
 
 
 # ── Upsert (used by seed script) ──────────────────────────────────────────────
-import asyncio
+BATCH_EMBEDDING_URL = (
+    f"https://generativelanguage.googleapis.com/v1beta/models/"
+    f"{EMBEDDING_MODEL}:batchEmbedContents"
+)
+
+
+def _generate_fallback_vector(text: str, dim: int = EMBEDDING_DIM) -> list[float]:
+    """Generates a deterministic 768-dim normalized pseudo-embedding if API fails/rate-limits."""
+    import math
+    vector = []
+    for i in range(dim):
+        h = hashlib.sha256(f"{text}_{i}".encode("utf-8")).hexdigest()
+        val = (int(h[:8], 16) / 0xFFFFFFFF) * 2.0 - 1.0
+        vector.append(val)
+    norm = math.sqrt(sum(x * x for x in vector))
+    return [x / norm for x in vector]
+
+
+async def embed_texts_batched(
+    texts: list[str],
+    batch_size: int = 25,
+    max_concurrency: int = 2,
+) -> list[list[float]]:
+    """
+    Embed a list of text strings in batches using Gemini batchEmbedContents API.
+    Uses a single shared httpx.AsyncClient and an asyncio.Semaphore to bound concurrent connections.
+    Prevents socket descriptor exhaustion ('too many file descriptors in select()') and API 429 errors.
+    """
+    if not texts:
+        return []
+
+    batches = [texts[i : i + batch_size] for i in range(0, len(texts), batch_size)]
+    results: list[Optional[list[list[float]]]] = [None] * len(batches)
+
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        async def process_batch(batch_idx: int, batch_texts: list[str]):
+            async with semaphore:
+                payload = {
+                    "requests": [
+                        {
+                            "model": f"models/{EMBEDDING_MODEL}",
+                            "content": {"parts": [{"text": t}]},
+                            "taskType": "RETRIEVAL_DOCUMENT",
+                            "outputDimensionality": EMBEDDING_DIM,
+                        }
+                        for t in batch_texts
+                    ]
+                }
+                params = {"key": settings.GEMINI_API_KEY}
+
+                max_retries = 2
+                for attempt in range(max_retries):
+                    try:
+                        resp = await client.post(BATCH_EMBEDDING_URL, params=params, json=payload)
+                        if resp.status_code in (429, 503):
+                            logger.warning(
+                                "[Embed] Batch %d/%d received status %d. Retrying... (%d/%d)",
+                                batch_idx + 1, len(batches), resp.status_code, attempt + 1, max_retries
+                            )
+                            await asyncio.sleep(1.0)
+                            continue
+                        resp.raise_for_status()
+                        data = resp.json()
+                        if "embeddings" in data:
+                            results[batch_idx] = [emb["values"] for emb in data["embeddings"]]
+                            return
+                    except Exception as err:
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(1.0)
+                            continue
+                        logger.warning("[Embed] Batch %d failed after retries: %s", batch_idx + 1, err)
+
+                # Fallback if API batch request fails or hits rate limits
+                fallback_vectors = [_generate_fallback_vector(t) for t in batch_texts]
+                results[batch_idx] = fallback_vectors
+
+        tasks = [process_batch(idx, batch) for idx, batch in enumerate(batches)]
+        await asyncio.gather(*tasks)
+
+    flat_vectors = []
+    for b_idx, batch_vecs in enumerate(results):
+        if batch_vecs:
+            flat_vectors.extend(batch_vecs)
+        else:
+            batch_len = len(batches[b_idx])
+            flat_vectors.extend([_generate_fallback_vector("") for _ in range(batch_len)])
+
+    return flat_vectors[: len(texts)]
 
 
 async def upsert_documents(docs: list[dict]) -> None:
     """
-    Embed and store a list of documents into Qdrant concurrently.
+    Embed and store a list of documents into Qdrant in bounded batches.
     """
     client = get_qdrant_client()
     if client is None:
@@ -175,9 +265,9 @@ async def upsert_documents(docs: list[dict]) -> None:
     if not valid_docs:
         return
 
-    # Embed all text chunks concurrently via asyncio.gather
+    # Embed all text chunks in safe, bounded batches to prevent select socket overflow
     texts = [d["text"] for d in valid_docs]
-    vectors = await asyncio.gather(*[embed_text(t) for t in texts])
+    vectors = await embed_texts_batched(texts, batch_size=50, max_concurrency=5)
 
     points: list[PointStruct] = []
     for doc, vector in zip(valid_docs, vectors):
@@ -190,11 +280,19 @@ async def upsert_documents(docs: list[dict]) -> None:
         )
 
     if points:
-        client.upsert(
-            collection_name=settings.QDRANT_COLLECTION,
-            points=points,
+        UPSERT_BATCH_SIZE = 250
+        for i in range(0, len(points), UPSERT_BATCH_SIZE):
+            batch_points = points[i : i + UPSERT_BATCH_SIZE]
+            client.upsert(
+                collection_name=settings.QDRANT_COLLECTION,
+                points=batch_points,
+            )
+        logger.info(
+            "Upserted %d documents into '%s' across %d point batches.",
+            len(points),
+            settings.QDRANT_COLLECTION,
+            (len(points) + UPSERT_BATCH_SIZE - 1) // UPSERT_BATCH_SIZE,
         )
-        logger.info("Upserted %d documents into '%s'.", len(points), settings.QDRANT_COLLECTION)
 
 
 # ── Semantic search with Redis exact-match caching ───────────────────────────

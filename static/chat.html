@@ -353,8 +353,8 @@ input[type=range]::-webkit-slider-thumb{
     </div>
   </div>
   <div id="inputBar">
-    <input type="file" id="sessionFileInput" accept=".pdf,.docx" style="display:none"/>
-    <button id="sessionUploadBtn" title="Upload PDF or DOCX to this chat session" disabled style="padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);color:var(--accent2);font-size:14px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all .15s;font-family:'Inter',sans-serif">
+    <input type="file" id="sessionFileInput" accept=".pdf,.docx,.pptx,.txt" style="display:none"/>
+    <button id="sessionUploadBtn" title="Upload PDF, DOCX, PPTX, or TXT file to this chat session" disabled style="padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);color:var(--accent2);font-size:14px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all .15s;font-family:'Inter',sans-serif">
       <span style="font-size:16px">📎</span> Upload File
     </button>
     <textarea id="messageInput" rows="1" placeholder="Ask about books or your uploaded document…" disabled></textarea>
@@ -406,8 +406,8 @@ input[type=range]::-webkit-slider-thumb{
     <div class="section-title"><span class="dot"></span>Eval Harness</div>
     <p class="eval-note">Runs 5 configs × 14 questions. Computes Precision, Recall, F1 &amp; Hit Rate for each.</p>
     <div style="margin-bottom:10px">
-      <input type="file" id="pdfFileInput" accept=".pdf" style="display:none" />
-      <button id="uploadPdfBtn" style="width:100%;padding:8px;border-radius:9px;border:1px dashed var(--accent);background:rgba(99,102,241,.1);color:var(--accent);font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;margin-bottom:4px">📄 Upload PDF for RAG Evaluation</button>
+      <input type="file" id="pdfFileInput" accept=".pdf,.docx,.pptx,.txt" style="display:none" />
+      <button id="uploadPdfBtn" style="width:100%;padding:8px;border-radius:9px;border:1px dashed var(--accent);background:rgba(99,102,241,.1);color:var(--accent);font-size:12px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;margin-bottom:4px">📄 Upload File (.pdf, .docx, .pptx, .txt) for RAG Evaluation</button>
       <div id="pdfUploadStatus" style="font-size:11px;color:var(--muted);margin-bottom:6px;text-align:center"></div>
     </div>
     <button id="runEvalBtn">▶ Run Full Evaluation</button>

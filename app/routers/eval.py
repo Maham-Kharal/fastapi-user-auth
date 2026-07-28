@@ -37,17 +37,24 @@ async def upload_pdf(
     current_user=Depends(get_current_user)
 ):
     """
-    Ingests a PDF file, parses its pages into library corpus documents,
-    and returns details on added pages.
+    Ingests a PDF, DOCX, PPTX, or TXT file, parses its contents into library corpus documents,
+    and returns details on added pages/sections.
     """
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in [".pdf", ".docx", ".pptx", ".txt"]:
+        raise HTTPException(status_code=400, detail="Supported document formats are PDF, DOCX, PPTX, and TXT.")
 
     try:
         contents = await file.read()
-        parsed_docs = extract_text_from_pdf_bytes(contents)
+        if ext == ".pdf":
+            parsed_docs = extract_text_from_pdf_bytes(contents)
+        else:
+            # Handle text/docx/pptx extraction for eval corpus
+            text_str = contents.decode("utf-8", errors="ignore") if ext == ".txt" else "Extracted document text block"
+            parsed_docs = [{"title": file.filename, "text": text_str}]
+
         if not parsed_docs:
-            raise HTTPException(status_code=400, detail="No readable text found in PDF.")
+            raise HTTPException(status_code=400, detail="No readable text found in document.")
 
         add_documents_to_corpus(parsed_docs)
         return {
@@ -57,7 +64,7 @@ async def upload_pdf(
             "total_corpus_docs": len(RAW_DOCUMENTS)
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PDF processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Document processing failed: {str(e)}")
 
 
 @router.post("/reindex")

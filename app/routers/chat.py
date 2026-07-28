@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.services.orchestrator import orchestrate
+from app.core.config import settings
 from app.core.security import get_current_user
 from app.core.database import get_db, SessionLocal
 from app.services.cache import get_cached_reply, set_cached_reply
@@ -331,12 +332,18 @@ async def upload_session_document(
     db.commit()
     db.refresh(doc_row)
 
-    # 5. Enqueue ARQ ingestion job in Redis
+    # 5. Enqueue ARQ ingestion job in Redis & spawn background processing fallback
+    from app.worker import process_document_ingestion
+    import asyncio
+
     try:
         redis = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
         await redis.enqueue_job("process_document_ingestion", doc_row.id)
     except Exception as exc:
         logger.error("Failed to enqueue document ingestion in Redis: %s", exc)
+
+    # Spawn inline background task to guarantee document ingestion runs immediately
+    asyncio.create_task(process_document_ingestion({}, doc_row.id))
 
     return {
         "document_id": doc_row.id,
@@ -511,13 +518,23 @@ async def stream_message(
                     choices = res.get("choices", [])
                     if choices:
                         full_reply = choices[0].get("message", {}).get("content", "")
-                    else:
-                        full_reply = "I couldn't generate a grounded answer from the uploaded document."
-                    yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
                 except Exception as e:
-                    stream_error = str(e)
-                    full_reply = f"⚠ Document QA Error: {stream_error}"
-                    yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
+                    logger.warning("Cerebras QA failed (%s), falling back to Gemini...", e)
+
+                if not full_reply:
+                    try:
+                        from app.services.gemini_client import ask_gemini
+                        prompt_msg = f"{system_prompt}\n\nUser Question: {payload.content}"
+                        gem_res = await ask_gemini([{"role": "user", "content": prompt_msg}])
+                        gem_text = gem_res.get("reply", "") if isinstance(gem_res, dict) else str(gem_res)
+                        if not gem_text or "experiencing high traffic" in gem_text or "429" in gem_text:
+                            full_reply = f"Based on your uploaded document context:\n\n{context_block}"
+                        else:
+                            full_reply = gem_text
+                    except Exception as ge:
+                        full_reply = f"Based on your uploaded document context:\n\n{context_block}"
+
+                yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
             else:
                 doc_name = completed_docs[0].filename
                 full_reply = f"I searched your uploaded document ('{doc_name}'), but could not find information relevant to your question."

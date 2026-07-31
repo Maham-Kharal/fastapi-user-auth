@@ -318,7 +318,11 @@ async def upload_session_document(
     with open(file_path, "wb") as f:
         f.write(content)
 
-    # 4. Insert Document record in Postgres DB
+    # Format human-readable file size
+    size_kb = len(content) / 1024
+    size_str = f"{size_kb / 1024:.1f} MB" if size_kb >= 1024 else f"{size_kb:.1f} KB"
+
+    # 4. Insert Document record & ChatMessage row in Postgres DB
     doc_row = Document(
         user_id=current_user.id,
         session_id=session.id,
@@ -329,8 +333,16 @@ async def upload_session_document(
         status="processing",
     )
     db.add(doc_row)
+
+    chat_msg = ChatMessage(
+        session_id=session.id,
+        role="user",
+        content=f"📎 Attached file: **{file.filename}** ({size_str})"
+    )
+    db.add(chat_msg)
     db.commit()
     db.refresh(doc_row)
+    db.refresh(chat_msg)
 
     # 5. Enqueue ARQ ingestion job in Redis & spawn background processing fallback
     from app.worker import process_document_ingestion
@@ -351,6 +363,8 @@ async def upload_session_document(
         "file_type": doc_row.file_type,
         "file_size_bytes": doc_row.file_size_bytes,
         "status": doc_row.status,
+        "message_id": chat_msg.id,
+        "formatted_size": size_str,
     }
 
 
@@ -445,58 +459,72 @@ async def stream_message(
         return StreamingResponse(blocked_generator(), media_type="text/event-stream")
     # --- end guardrail check ---
 
-    # Check for session uploaded documents
-    completed_docs = (
-        db.query(Document)
-        .filter(
-            Document.session_id == session.id,
-            Document.user_id == current_user.id,
-            Document.status == "completed",
-        )
-        .all()
-    )
-
+    completed_docs = []
     rag_context_parts = []
     scoped_doc_chunks = []
 
-    if completed_docs:
-        # Perform metadata-scoped search strictly isolated to this session_id and user_id
-        try:
-            scoped_doc_chunks = await search_session_documents(
-                payload.content, session.id, current_user.id, top_k=4
-            )
-            rag_context_parts = [c["content"] for c in scoped_doc_chunks]
-        except Exception as e:
-            logger.warning("Scoped document RAG search failed: %s", e)
-    else:
-        # Fall back to global library search
-        try:
-            active_settings = get_active_chunking_settings()
-            top_k = active_settings.get("top_k", 3)
-            rag_context_parts = await search_library(payload.content, top_k=top_k)
-        except Exception as e:
-            logger.warning("RAG context lookup failed: %s", e)
+    # 1. First Check Live Notion Workspace Policy via MCP / REST Integration
+    from app.services.notion_mcp import query_notion_live_policy
+    notion_res = await query_notion_live_policy(payload.content)
 
-    system_prompt = SYSTEM_PROMPT
-    if scoped_doc_chunks:
-        context_block = "\n".join(
-            f"[{c['source']}, {c['section']}]: {c['content']}" for c in scoped_doc_chunks
-        )
+    if notion_res.get("found"):
         system_prompt = (
-            "You are a helpful assistant grounding your answers in the user's uploaded document.\n"
-            "Use ONLY the document excerpts below to answer the user's question accurately.\n"
-            "Cite your source for every claim using the format [Filename, Page X] or [Filename, Section Y].\n\n"
-            "Document Excerpts:\n"
-            + context_block
+            "You are a helpful assistant grounding your answers in the user's live Notion workspace policy.\n"
+            "Use ONLY the live Notion policy content below to answer the user's question accurately.\n"
+            f"Cite your source as [{notion_res['source']}].\n\n"
+            f"Live Notion Policy ({notion_res['title']}):\n"
+            + notion_res["content"]
         )
-    elif rag_context_parts:
-        context_block = "\n".join(f"- {c}" for c in rag_context_parts)
-        system_prompt = (
-            SYSTEM_PROMPT
-            + "\n\nRelevant library knowledge retrieved from database:\n"
-            + context_block
-            + "\nUse this information to give accurate, grounded answers."
+    else:
+        # Check for session uploaded documents
+        completed_docs = (
+            db.query(Document)
+            .filter(
+                Document.session_id == session.id,
+                Document.user_id == current_user.id,
+                Document.status == "completed",
+            )
+            .all()
         )
+
+        if completed_docs:
+            # Perform metadata-scoped search strictly isolated to this session_id and user_id
+            try:
+                scoped_doc_chunks = await search_session_documents(
+                    payload.content, session.id, current_user.id, top_k=4
+                )
+                rag_context_parts = [c["content"] for c in scoped_doc_chunks]
+            except Exception as e:
+                logger.warning("Scoped document RAG search failed: %s", e)
+        else:
+            # Fall back to global library search
+            try:
+                active_settings = get_active_chunking_settings()
+                top_k = active_settings.get("top_k", 3)
+                rag_context_parts = await search_library(payload.content, top_k=top_k)
+            except Exception as e:
+                logger.warning("RAG context lookup failed: %s", e)
+
+        system_prompt = SYSTEM_PROMPT
+        if scoped_doc_chunks:
+            context_block = "\n".join(
+                f"[{c['source']}, {c['section']}]: {c['content']}" for c in scoped_doc_chunks
+            )
+            system_prompt = (
+                "You are a helpful assistant grounding your answers in the user's uploaded document.\n"
+                "Use ONLY the document excerpts below to answer the user's question accurately.\n"
+                "Cite your source for every claim using the format [Filename, Page X] or [Filename, Section Y].\n\n"
+                "Document Excerpts:\n"
+                + context_block
+            )
+        elif rag_context_parts:
+            context_block = "\n".join(f"- {c}" for c in rag_context_parts)
+            system_prompt = (
+                SYSTEM_PROMPT
+                + "\n\nRelevant library knowledge retrieved from database:\n"
+                + context_block
+                + "\nUse this information to give accurate, grounded answers."
+            )
 
     history_rows = _load_history(session.id, db)
     history = [{"role": m.role, "content": m.content} for m in history_rows]
@@ -506,7 +534,44 @@ async def stream_message(
         stream_error = None
         start_time = time.time()
 
-        if completed_docs:
+        if notion_res.get("found"):
+            # Try Cerebras first for instant, concise Notion QA
+            try:
+                res = await call_cerebras(
+                    messages=history,
+                    system_prompt=system_prompt,
+                    temperature=0.2,
+                )
+                choices = res.get("choices", [])
+                if choices:
+                    full_reply = choices[0].get("message", {}).get("content", "")
+            except Exception as ce:
+                logger.warning("Cerebras QA for Notion failed (%s), trying Gemini...", ce)
+
+            if not full_reply:
+                try:
+                    from app.services.gemini_client import ask_gemini
+                    prompt_msg = f"{system_prompt}\n\nUser Question: {payload.content}"
+                    gem_res = await ask_gemini([{"role": "user", "content": prompt_msg}])
+                    gem_text = gem_res.get("reply", "") if isinstance(gem_res, dict) else str(gem_res)
+                    if gem_text and "experiencing high traffic" not in gem_text and "429" not in gem_text:
+                        full_reply = gem_text
+                except Exception as ge:
+                    logger.warning("Gemini QA for Notion failed (%s)", ge)
+
+            if not full_reply:
+                # Smart excerpt extraction if LLMs hit API quota limits
+                content = notion_res["content"]
+                q_words = [w.lower() for w in payload.content.split() if len(w) > 3]
+                relevant_blocks = [
+                    block for block in content.split("\n### ") 
+                    if any(w in block.lower() for w in q_words)
+                ]
+                excerpt = "\n### ".join(relevant_blocks[:2]) if relevant_blocks else content[:400]
+                full_reply = f"Based on your live Notion workspace policy ({notion_res['title']}):\n\n{excerpt}\n\nSource: [{notion_res['source']}]"
+
+            yield f"data: {json.dumps({'chunk': full_reply})}\n\n"
+        elif completed_docs:
             if scoped_doc_chunks:
                 # Direct grounded answer using Gemini / Cerebras with document system prompt
                 try:

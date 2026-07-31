@@ -6,6 +6,7 @@
 <title>Zylo — AI Library Assistant</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script src="/static/marked.min.js"></script>
 <style>
 :root {
   --bg:       #0d0f14;
@@ -141,6 +142,50 @@ li.active .session-dot{background:var(--accent)}
 }
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
 @keyframes slideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+/* Markdown Formatting for Assistant Bubbles */
+.bubble.assistant p { margin: 0 0 8px 0; }
+.bubble.assistant p:last-child { margin-bottom: 0; }
+.bubble.assistant strong { font-weight: 700; color: #ffffff; }
+.bubble.assistant em { font-style: italic; color: #e2e8f0; }
+.bubble.assistant ul, .bubble.assistant ol { margin: 6px 0 8px 20px; padding: 0; }
+.bubble.assistant li { margin-bottom: 4px; line-height: 1.5; }
+.bubble.assistant code {
+  background: rgba(0, 0, 0, 0.35);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--accent2);
+  border: 1px solid rgba(255,255,255,0.05);
+}
+.bubble.assistant pre {
+  background: #090b10;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+.bubble.assistant pre code {
+  background: transparent;
+  padding: 0;
+  border: none;
+  color: var(--text);
+}
+.bubble.assistant h1, .bubble.assistant h2, .bubble.assistant h3, .bubble.assistant h4 {
+  margin: 12px 0 6px 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent2);
+}
+.bubble.assistant blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 8px 0;
+  padding-left: 10px;
+  color: var(--muted);
+  font-style: italic;
+}
 
 /* ── Metadata card beneath assistant bubble ── */
 .meta-card{
@@ -313,9 +358,41 @@ input[type=range]::-webkit-slider-thumb{
   transform:translateY(80px);opacity:0;transition:all .3s ease;pointer-events:none;
   display:flex;align-items:center;gap:8px;
 }
-#toast.show{transform:translateY(0);opacity:1}
-#toast.ok .toast-icon{color:var(--green)}
-#toast.err .toast-icon{color:var(--red)}
+/* File Attachment Card in Chat */
+.file-attachment-card{
+  display:flex;align-items:center;gap:12px;
+  background:var(--surface2);border:1px solid var(--border);
+  border-radius:14px;padding:10px 14px;min-width:280px;max-width:380px;
+  margin:4px 0;box-shadow:0 4px 16px rgba(0,0,0,.2);
+}
+.file-attachment-card .file-icon-box{
+  width:42px;height:42px;border-radius:10px;
+  display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;transition:transform .15s ease;
+}
+.file-icon-box.pdf{background:rgba(239,68,68,.18);color:#f87171;border:1px solid rgba(239,68,68,.35)}
+.file-icon-box.docx{background:rgba(59,130,246,.18);color:#60a5fa;border:1px solid rgba(59,130,246,.35)}
+.file-icon-box.pptx{background:rgba(249,115,22,.18);color:#fb923c;border:1px solid rgba(249,115,22,.35)}
+.file-icon-box.txt{background:rgba(168,85,247,.18);color:#c084fc;border:1px solid rgba(168,85,247,.35)}
+.file-attachment-card .file-details{
+  display:flex;flex-direction:column;gap:2px;flex:1;overflow:hidden;
+}
+.file-attachment-card .file-name{
+  font-size:13px;font-weight:600;color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.file-attachment-card .file-meta{
+  font-size:11px;color:var(--muted);
+}
+.file-attachment-card .file-badge{
+  font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;
+  background:rgba(52,211,153,.15);color:var(--green);
+  border:1px solid rgba(52,211,153,.3);flex-shrink:0;letter-spacing:.3px;
+}
+.file-attachment-card .file-badge.indexing{
+  background:rgba(251,191,36,.15);color:var(--yellow);
+  border-color:rgba(251,191,36,.3);
+}
 </style>
 </head>
 <body>
@@ -595,7 +672,113 @@ $("newSessionBtn").addEventListener("click", async () => {
 $("logoutBtn").addEventListener("click", () => { localStorage.removeItem("token"); location.href="login.html"; });
 
 // ── Bubble helpers ────────────────────────────────────────────────
+function escapeHtml(str) {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function appendFileCard(filename, sizeStr, docId = null, status = "completed") {
+  const emptyState = $("emptyState");
+  if (emptyState) emptyState.remove();
+
+  const parts = filename.split(".");
+  const ext = parts.length > 1 ? parts.pop().toLowerCase() : "file";
+  
+  let typeLabel = ext.toUpperCase();
+  let iconSvg = "";
+  let iconClass = "txt";
+
+  if (ext === "pdf") {
+    iconClass = "pdf";
+    typeLabel = "PDF";
+    iconSvg = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`;
+  } else if (ext === "docx" || ext === "doc") {
+    iconClass = "docx";
+    typeLabel = "DOCX";
+    iconSvg = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><path d="M10 9H8"/></svg>`;
+  } else if (ext === "pptx" || ext === "ppt") {
+    iconClass = "pptx";
+    typeLabel = "PPTX";
+    iconSvg = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/><path d="M7 8h10"/></svg>`;
+  } else if (ext === "txt") {
+    iconClass = "txt";
+    typeLabel = "TXT";
+    iconSvg = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`;
+  } else {
+    iconClass = "txt";
+    typeLabel = ext.toUpperCase().slice(0, 4);
+    iconSvg = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>`;
+  }
+
+  const row = document.createElement("div");
+  row.className = "msg-row user";
+  if (docId) row.dataset.docId = docId;
+
+  const avatar = document.createElement("div");
+  avatar.className = "avatar user";
+  avatar.textContent = "U";
+
+  const card = document.createElement("div");
+  card.className = "file-attachment-card";
+  card.innerHTML = `
+    <div class="file-icon-box ${iconClass}">
+      ${iconSvg}
+    </div>
+    <div class="file-details">
+      <div class="file-name">${escapeHtml(filename)}</div>
+      <div class="file-meta">${sizeStr ? sizeStr + " • " : ""}${typeLabel} Document</div>
+    </div>
+    <div class="file-badge ${status === "indexing" ? "indexing" : ""}">${status === "indexing" ? "⏳ Indexing" : "✅ Indexed"}</div>
+  `;
+
+  row.append(card, avatar);
+  messagesEl.appendChild(row);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return { row, card };
+}
+
+function renderMarkdown(text) {
+  if (!text) return "";
+
+  // 1. Try marked parser first
+  if (typeof window.marked !== "undefined") {
+    try {
+      if (typeof window.marked.parse === "function") return window.marked.parse(text);
+      if (typeof window.marked === "function") return window.marked(text);
+    } catch (e) {
+      console.warn("marked parse error:", e);
+    }
+  }
+
+  // 2. Robust zero-dependency Markdown parser fallback
+  let html = escapeHtml(text);
+  html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+  html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+  html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.*?)__/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  html = html.replace(/_(.*?)_/g, '<em>$1</em>');
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/^\d+\.\s+(.*$)/gim, '<li>$1</li>');
+  html = html.replace(/^[\*\-]\s+(.*$)/gim, '<li>$1</li>');
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
 function appendBubble(role, text){
+  if (role === "user" && text.startsWith("📎 Attached file:")) {
+    const match = text.match(/Attached file:\s*\*\*([^*]+)\*\*(?:\s*\(([^)]+)\))?/);
+    if (match) {
+      return appendFileCard(match[1], match[2] || "", null, "completed");
+    }
+  }
+
   const emptyState = $("emptyState");
   if(emptyState) emptyState.remove();
 
@@ -608,7 +791,11 @@ function appendBubble(role, text){
 
   const bubble = document.createElement("div");
   bubble.className = `bubble ${role}`;
-  bubble.textContent = text;
+  if (role === "assistant") {
+    bubble.innerHTML = renderMarkdown(text);
+  } else {
+    bubble.textContent = text;
+  }
 
   row.append(role==="user" ? bubble : avatar, role==="user" ? avatar : bubble);
   messagesEl.appendChild(row);
@@ -751,7 +938,7 @@ async function sendMessage(){
           const parsed=JSON.parse(raw);
           if(parsed.chunk!==undefined){
             fullReply+=parsed.chunk;
-            bubble.textContent=fullReply;
+            bubble.innerHTML=renderMarkdown(fullReply);
             messagesEl.scrollTop=messagesEl.scrollHeight;
           }
           if(parsed.metadata) meta=parsed.metadata;
@@ -865,6 +1052,9 @@ $("sessionFileInput").addEventListener("change", async (evt) => {
     const docId = docData.document_id;
     bannerText.textContent = `⚙ Parsing & indexing '${file.name}' via ARQ background worker...`;
 
+    // Render Visual Attachment Card in Chat Timeline
+    const { card } = appendFileCard(docData.filename, docData.formatted_size || "", docId, "indexing");
+
     let attempts = 0;
     const pollInterval = setInterval(async () => {
       attempts++;
@@ -875,11 +1065,28 @@ $("sessionFileInput").addEventListener("change", async (evt) => {
           clearInterval(pollInterval);
           bannerText.textContent = `✅ Document '${file.name}' successfully indexed! Answers will now be grounded in this file.`;
           showToast(`'${file.name}' indexed successfully!`);
+          
+          // Update file attachment badge in chat timeline
+          const badge = card.querySelector(".file-badge");
+          if (badge) {
+            badge.textContent = "✅ Indexed";
+            badge.classList.remove("indexing");
+          }
+
           setTimeout(() => { banner.style.display = "none"; }, 6000);
         } else if (s.status === "failed") {
           clearInterval(pollInterval);
           bannerText.textContent = `❌ Ingestion failed: ${s.error_message || "Unknown error"}`;
           showToast(`Ingestion failed: ${s.error_message}`, "err");
+          
+          const badge = card.querySelector(".file-badge");
+          if (badge) {
+            badge.textContent = "❌ Failed";
+            badge.classList.remove("indexing");
+            badge.style.background = "rgba(239,68,68,0.15)";
+            badge.style.color = "var(--red)";
+            badge.style.borderColor = "rgba(239,68,68,0.3)";
+          }
         }
       }
       if (attempts > 30) {

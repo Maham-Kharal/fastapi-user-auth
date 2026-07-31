@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     # ARQ Redis settings
     REDIS_URL: str = "redis://127.0.0.1:6380"
 
+    # Notion MCP & Integration settings
+    NOTION_API_KEY: str = ""
+    NOTION_DATABASE_ID: str = ""
+
     # SMTP Settings
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587

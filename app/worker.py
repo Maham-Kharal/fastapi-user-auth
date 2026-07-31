@@ -190,8 +190,18 @@ async def generate_and_email_report(ctx):
     except Exception as err:
         logger.error(f"Failed to deliver email: {err}")
 
+    # 4. Write back summary entry to Notion workspace / database
+    notion_write_result = {}
+    try:
+        from app.services.notion_mcp import write_notion_daily_summary
+        logger.info("ARQ Worker: Writing daily summary entry back to Notion...")
+        notion_write_result = await write_notion_daily_summary(stats)
+        logger.info("ARQ Worker: Notion write-back completed: %s", notion_write_result)
+    except Exception as n_err:
+        logger.warning(f"ARQ Worker: Notion write-back encountered error: {n_err}")
+
     logger.info("ARQ Worker: Completed generate_and_email_report task successfully.")
-    return {"status": "success", "pdf_size_bytes": len(pdf_bytes), "stats": stats}
+    return {"status": "success", "pdf_size_bytes": len(pdf_bytes), "stats": stats, "notion_write": notion_write_result}
 
 
 from app.core.database import SessionLocal
